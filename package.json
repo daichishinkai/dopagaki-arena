@@ -1,0 +1,18 @@
+{
+  "name": "dopagaki-arena",
+  "private": true,
+  "workspaces": ["shared", "relay", "client"],
+  "scripts": {
+    "dev": "concurrently -n relay,client -c blue,green \"npm run dev:relay\" \"npm run dev:client\"",
+    "dev:client": "npm run dev -w client",
+    "dev:relay": "npm run dev -w relay",
+    "test": "npm test -w shared && npm test -w relay",
+    "typecheck": "npm run typecheck --workspaces",
+    "build": "npm run build -w shared && npm run build -w relay && npm run build -w client",
+    "start:relay": "npm run start -w relay"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.3"
+  }
+}

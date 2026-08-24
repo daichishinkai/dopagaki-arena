@@ -1,0 +1,211 @@
+/**
+ * CPU bot（SPEC 12章）。ホスト機で実行し、毎tick PlayerInput を返す。
+ * Lv1「動く的」/ Lv2「戦える」/ Lv3「チームで動く」。
+ * 難易度差は3パラメータ（エイム誤差・反応遅延・スキル使用頻度）のみ。専用ロジックは作らない。
+ */
+import { BALANCE, type CharClass } from "../balance";
+import type { PlayerId, PlayerInput, PlayerState, SimState } from "./types";
+import { NULL_INPUT } from "./types";
+import { isAlive, WEAPONS } from "./step";
+
+export type BotLevel = 1 | 2 | 3;
+
+export interface BotMemory {
+  lastThink: number;
+  aim: number;
+  targetId: PlayerId | null;
+  strafeDir: 1 | -1;
+  strafeFlipAt: number;
+  desiredWeapon: number;
+  fire: boolean;
+  retreat: boolean;
+  healAllyId: PlayerId | null;
+}
+
+export function createBotMemory(): BotMemory {
+  return { lastThink: -Infinity, aim: 0, targetId: null, strafeDir: 1, strafeFlipAt: 0, desiredWeapon: 0, fire: false, retreat: false, healAllyId: null };
+}
+
+const RANGE: Record<CharClass, number[]> = {
+  // 武器スロットごとの得意距離
+  speed: [55, 320],
+  heavy: [340, 55],
+  support: [520, 260, 45],
+};
+
+function losBlocked(state: SimState, x1: number, y1: number, x2: number, y2: number): boolean {
+  for (const w of state.walls) {
+    // 粗い線分交差（bot用途なので厳密さより軽さ）
+    const d1 = side(w.x1, w.y1, w.x2, w.y2, x1, y1);
+    const d2 = side(w.x1, w.y1, w.x2, w.y2, x2, y2);
+    const d3 = side(x1, y1, x2, y2, w.x1, w.y1);
+    const d4 = side(x1, y1, x2, y2, w.x2, w.y2);
+    if (d1 * d2 < 0 && d3 * d4 < 0) return true;
+  }
+  return false;
+}
+function side(ax: number, ay: number, bx: number, by: number, px: number, py: number): number {
+  return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+}
+
+function pickTarget(state: SimState, me: PlayerState, level: BotLevel): PlayerState | null {
+  const enemies = state.players.filter((p) => p.team !== me.team && isAlive(p));
+  if (enemies.length === 0) return null;
+  if (level >= 3) {
+    // Lv3: 集中砲火（実質耐久が最も低い敵）
+    return enemies.reduce((a, b) => (a.hp + a.shield <= b.hp + b.shield ? a : b));
+  }
+  return enemies.reduce((a, b) => (dist(me, a) <= dist(me, b) ? a : b));
+}
+
+function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** 思考（反応遅延ごとに更新）。エイム誤差はここで乗せる */
+function think(state: SimState, me: PlayerState, mem: BotMemory, level: BotLevel, rng: () => number): void {
+  const params = BALANCE.bot.levels[level];
+  const target = pickTarget(state, me, level);
+  mem.targetId = target?.id ?? null;
+  mem.healAllyId = null;
+  if (!target) {
+    mem.fire = false;
+    return;
+  }
+
+  // Lv3 支援: 負傷味方がいれば回復弾を優先
+  if (level >= 3 && me.cls === "support") {
+    const ally = state.players
+      .filter((p) => p.id !== me.id && p.team === me.team && isAlive(p) && p.hp < BALANCE.player.hp * 0.6)
+      .sort((a, b) => a.hp - b.hp)[0];
+    if (ally) mem.healAllyId = ally.id;
+  }
+
+  const aimAt = mem.healAllyId ? state.players.find((p) => p.id === mem.healAllyId)! : target;
+  const base = Math.atan2(aimAt.y - me.y, aimAt.x - me.x);
+  mem.aim = base + (rng() * 2 - 1) * params.aimError;
+
+  mem.retreat = me.hp < 30;
+  // Lv3: 弔い合戦中は攻め上がる
+  if (level >= 3 && state.t < me.boostUntil) mem.retreat = false;
+
+  // 武器選択（Lv2+）
+  if (level >= 2) {
+    if (mem.healAllyId) {
+      mem.desiredWeapon = 1; // 支援: 回復弾
+    } else {
+      const d = dist(me, target);
+      const ranges = RANGE[me.cls];
+      let best = 0;
+      let bestScore = Infinity;
+      ranges.forEach((r, i) => {
+        if (me.cls === "support" && i === 1) return; // 敵狙いで回復弾は選ばない
+        const score = Math.abs(d - r);
+        if (score < bestScore) { bestScore = score; best = i; }
+      });
+      mem.desiredWeapon = best;
+    }
+  } else {
+    mem.desiredWeapon = me.weapon;
+  }
+
+  const engageTarget = mem.healAllyId ? null : target;
+  mem.fire = engageTarget ? !losBlocked(state, me.x, me.y, engageTarget.x, engageTarget.y) : true;
+
+  if (state.t >= mem.strafeFlipAt) {
+    mem.strafeDir = rng() < 0.5 ? 1 : -1;
+    mem.strafeFlipAt = state.t + 0.8 + rng() * 0.8;
+  }
+}
+
+/** スキルの条件反射（Lv2+）。skillFreq で使用確率を間引く */
+function skills(state: SimState, me: PlayerState, mem: BotMemory, level: BotLevel, rng: () => number): Pick<PlayerInput, "skill1" | "skill2" | "skill3"> {
+  const out = { skill1: false, skill2: false, skill3: false };
+  if (level < 2) return out;
+  const freq = BALANCE.bot.levels[level].skillFreq;
+  const roll = () => rng() < freq;
+  const target = mem.targetId ? state.players.find((p) => p.id === mem.targetId) : null;
+  const d = target ? dist(me, target) : Infinity;
+  const recentlyHit = state.t - me.lastDamagedAt < 0.5;
+
+  if (me.cls === "speed") {
+    if (me.escapeGauge >= BALANCE.speedSkills.gaugeMax * 0.95 && (mem.retreat || d > 450) && roll()) out.skill1 = true; // 逃げ/詰めの高速移動
+    else if (mem.retreat && me.escapeGauge >= BALANCE.speedSkills.dash.cost + BALANCE.speedSkills.smoke.cost && roll()) out.skill2 = true;
+    else if (me.skillCd[2] <= 0 && me.weapon === 1 && d < 420 && roll()) out.skill3 = true; // 過装填
+  } else if (me.cls === "heavy") {
+    if (recentlyHit && d < 130 && me.unifiedGauge >= BALANCE.heavySkills.slam.cost && roll()) out.skill1 = true; // 被弾→スラム
+    else if ((me.reload > 0 || me.hp < 40) && me.unifiedGauge >= BALANCE.heavySkills.wall.cost && roll()) out.skill2 = true;
+    else if (level >= 3 && state.mode === "teams" && me.unifiedGauge >= BALANCE.heavySkills.cover.cost && roll()) {
+      // Lv3: かばう対象判断（近くの瀕死味方）
+      const ally = state.players.find((p) => p.id !== me.id && p.team === me.team && isAlive(p) && p.hp < 35 && dist(me, p) < 420);
+      if (ally) {
+        mem.aim = Math.atan2(ally.y - me.y, ally.x - me.x);
+        out.skill3 = true;
+      }
+    }
+  } else {
+    if (me.hp < 25 && me.skillCd[0] <= 0 && roll()) out.skill1 = true; // 鈴
+    else if (state.mode === "teams" && me.skillCd[1] <= 0 && roll()) {
+      const near = state.players.some((p) => p.id !== me.id && p.team === me.team && isAlive(p) && p.hp < 70 && dist(me, p) <= BALANCE.supportSkills.areaHeal.radius);
+      if (near) out.skill2 = true;
+    } else if (me.skillCd[2] <= 0 && target && d < 620 && mem.fire && roll()) out.skill3 = true; // スタン弾
+  }
+  return out;
+}
+
+export function botInput(state: SimState, botId: PlayerId, level: BotLevel, mem: BotMemory, rng: () => number = Math.random): PlayerInput {
+  const me = state.players.find((p) => p.id === botId);
+  if (!me || !isAlive(me)) return { ...NULL_INPUT };
+
+  const params = BALANCE.bot.levels[level];
+  if (state.t - mem.lastThink >= params.reaction) {
+    mem.lastThink = state.t;
+    think(state, me, mem, level, rng);
+  }
+
+  const aimAtId = mem.healAllyId ?? mem.targetId;
+  const target = aimAtId ? state.players.find((p) => p.id === aimAtId) : null;
+  if (!target) return { ...NULL_INPUT, aim: mem.aim };
+
+  // 距離管理: 得意距離へ寄せる。retreat中は離れる
+  const ranges = RANGE[me.cls];
+  const want = mem.healAllyId ? 300 : ranges[Math.min(me.weapon, ranges.length - 1)]!;
+  const d = dist(me, target);
+  const toward = Math.atan2(target.y - me.y, target.x - me.x);
+  let moveA: number | null = null;
+  if (mem.retreat) moveA = toward + Math.PI;
+  else if (d > want * 1.15) moveA = toward;
+  else if (d < want * 0.7) moveA = toward + Math.PI;
+  let mx = 0;
+  let my = 0;
+  if (moveA !== null) {
+    mx = Math.cos(moveA);
+    my = Math.sin(moveA);
+  }
+  // ストレイフ（Lv2+）
+  if (level >= 2 && !mem.retreat) {
+    const s = toward + (Math.PI / 2) * mem.strafeDir;
+    mx += Math.cos(s) * 0.7;
+    my += Math.sin(s) * 0.7;
+  }
+  const len = Math.hypot(mx, my);
+  if (len > 1) {
+    mx /= len;
+    my /= len;
+  }
+
+  // 武器切替（エッジ）
+  const numWeapons = WEAPONS[me.cls].length;
+  const switchWeapon = level >= 2 && me.weapon !== (mem.desiredWeapon % numWeapons) && me.switchCd <= 0 && me.swingT <= 0;
+
+  // 射撃: スナイパーは溜め→適度な溜めでリリース（fire=false）
+  let fire = mem.fire && !mem.retreat;
+  if (mem.healAllyId && me.weapon === 1) fire = true;
+  if (me.cls === "support" && me.weapon === 0 && me.chargeT > 0) {
+    const targetCharge = level >= 2 ? 1.1 : 0.6;
+    if (me.chargeT >= targetCharge) fire = false; // リリースで発射
+  }
+
+  const sk = skills(state, me, mem, level, rng);
+  return { mx, my, aim: mem.aim, fire, guard: false, switchWeapon, ...sk };
+}

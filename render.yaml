@@ -1,0 +1,12 @@
+# 中継サーバー（relay）を Render にデプロイする設定
+# https://render.com → New → Blueprint でこのリポジトリを指定
+services:
+  - type: web
+    name: dopagaki-arena-relay
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build -w relay
+    startCommand: node relay/dist/index.js
+    envVars:
+      - key: PORT
+        value: "10000"
