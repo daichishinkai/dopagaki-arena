@@ -1,11 +1,13 @@
 import Phaser from "phaser";
 import {
   BALANCE,
+  type CharClass,
   moveSpeedOf,
   botInput,
   createBotMemory,
   createMatch,
   isAlive,
+  NULL_INPUT,
   shieldMaxOf,
   step,
   WEAPONS,
@@ -18,10 +20,10 @@ import {
   type SimEvent,
   type SimState,
 } from "@pvp/shared";
-import { loadBinds, type BindAction } from "../keybinds";
+import { isMouseBind, loadBinds, mouseMaskOf, type BindAction } from "../keybinds";
 import { COLORS, session } from "../session";
 import { BGM, SFX } from "../sound";
-import { FONT } from "../ui";
+import { button, FONT, label } from "../ui";
 
 const F = BALANCE.field;
 const P = BALANCE.player;
@@ -42,6 +44,9 @@ const SKILL_LABEL: Record<string, [string, string, string]> = {
 
 interface Snapshot { at: number; state: SimState }
 
+/** キーボードキーまたはマウスボタン（ビットマスク）のどちらかで発火するバインド */
+interface Bind { key?: Phaser.Input.Keyboard.Key; mask?: number }
+
 export class GameScene extends Phaser.Scene {
   private isHost = false;
   private me: PlayerId = "";
@@ -55,14 +60,18 @@ export class GameScene extends Phaser.Scene {
   private offs: Array<() => void> = [];
   private ending = false;
   private pendingEvents: SimEvent[] = [];
-  private prevRight = false;
   private botMems = new Map<PlayerId, BotMemory>();
 
   private gfx!: Phaser.GameObjects.Graphics;
   private hud!: Phaser.GameObjects.Text;
   private skillHud!: Phaser.GameObjects.Text;
   private names = new Map<PlayerId, Phaser.GameObjects.Text>();
-  private keys!: Record<BindAction, Phaser.Input.Keyboard.Key>;
+  private keys!: Record<BindAction, Bind>;
+  private mouseEdges: Partial<Record<BindAction, boolean>> = {};
+  /** 押した瞬間を保持しておく入力ラッチ（裁定11） */
+  private latch = { skill1: false, skill2: false, skill3: false };
+  private menuOpen = false;
+  private menu!: Phaser.GameObjects.Container;
   private combo = 0;
   private comboAt = 0;
   private predicted: { x: number; y: number } | null = null;
@@ -107,12 +116,22 @@ export class GameScene extends Phaser.Scene {
 
     const kb = this.input.keyboard!;
     const binds = loadBinds();
-    const key = (name: string) => kb.addKey(name === "SPACE" ? Phaser.Input.Keyboard.KeyCodes.SPACE : name);
+    const bind = (name: string): Bind =>
+      isMouseBind(name)
+        ? { mask: mouseMaskOf(name) }
+        : { key: kb.addKey(name === "SPACE" ? Phaser.Input.Keyboard.KeyCodes.SPACE : name) };
     this.keys = {
-      up: key(binds.up), down: key(binds.down), left: key(binds.left), right: key(binds.right),
-      guard: key(binds.guard), switchWeapon: key(binds.switchWeapon),
-      skill1: key(binds.skill1), skill2: key(binds.skill2), skill3: key(binds.skill3),
+      up: bind(binds.up), down: bind(binds.down), left: bind(binds.left), right: bind(binds.right),
+      guard: bind(binds.guard),
+      skill1: bind(binds.skill1), skill2: bind(binds.skill2), skill3: bind(binds.skill3),
     };
+    this.mouseEdges = {};
+
+    // ESCメニュー（訓練場: リセット/ゲージ全快/キー設定/退出、対戦: キー設定/退出）
+    this.menuOpen = false;
+    this.buildMenu();
+    this.input.keyboard!.on("keydown-ESC", () => this.toggleMenu());
+    label(this, F.width - 60, 20, "ESC メニュー", 13, "#475569");
     this.combo = 0;
     this.predicted = null;
     this.flashUntil.clear();
@@ -152,6 +171,77 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** ESCメニューの構築（最初は非表示） */
+  private buildMenu(): void {
+    const solo = session.mode === "solo";
+    const items: Array<[string, () => void]> = solo
+      ? [
+          ["リセット", () => { this.resetPractice(); this.toggleMenu(); }],
+          ["ゲージ全快", () => { this.refillGauges(); this.toggleMenu(); }],
+          ["キー設定", () => this.openSettings()],
+          ["閉じる", () => this.toggleMenu()],
+          ["訓練場から退出", () => this.scene.start("title")],
+        ]
+      : [
+          // 対戦中はシーンを離れると同期が切れるため、キー設定はタイトルからのみ
+          ["閉じる", () => this.toggleMenu()],
+          ["マッチから退出", () => this.leave("マッチから退出しました")],
+        ];
+
+    const h = 62 * items.length + 40;
+    const bg = this.add.graphics();
+    bg.fillStyle(0x000000, 0.72).fillRect(0, 0, F.width, F.height);
+    bg.lineStyle(2, 0x22d3ee, 1).fillStyle(0x0a1420, 0.97);
+    bg.fillRoundedRect(F.width / 2 - 180, F.height / 2 - h / 2, 360, h, 14);
+    bg.strokeRoundedRect(F.width / 2 - 180, F.height / 2 - h / 2, 360, h, 14);
+
+    this.menu = this.add.container(0, 0, [bg]);
+    items.forEach(([text, fn], i) => {
+      const b = button(this, F.width / 2, F.height / 2 - h / 2 + 50 + i * 62, text, fn, 300, 48);
+      this.menu.add(b.container);
+    });
+    this.menu.setDepth(9000).setVisible(false);
+  }
+
+  private toggleMenu(): void {
+    this.menuOpen = !this.menuOpen;
+    this.menu.setVisible(this.menuOpen);
+  }
+
+  private openSettings(): void {
+    this.registry.set("settingsReturn", "game");
+    this.scene.start("settings");
+  }
+
+  /** 訓練場を初期状態へ戻す（裁定14: ゲージはゼロ・経過時間は扱わない） */
+  private resetPractice(): void {
+    this.state = createMatch(session.players, session.matchMode === "ffa" ? "ffa" : "teams");
+    for (const p of this.state.players) {
+      p.escapeGauge = 0;
+      p.unifiedGauge = 0;
+      p.guardGauge = 0;
+    }
+    this.inputs = {};
+    this.botMems.clear();
+    for (const b of session.bots) this.botMems.set(b.id, createBotMemory());
+    this.predicted = null;
+    this.combo = 0;
+    this.latch = { skill1: false, skill2: false, skill3: false };
+    this.showBanner("リセット");
+  }
+
+  /** ゲージだけ満タンにする（コンボ・合体技の反復練習用） */
+  private refillGauges(): void {
+    const me = this.stateFor(this.me);
+    if (!me) return;
+    me.escapeGauge = BALANCE.speedSkills.gaugeMax;
+    me.unifiedGauge = BALANCE.unifiedGauge.max;
+    me.guardGauge = BALANCE.guard.max;
+    me.skillCd = [0, 0, 0];
+    me.skillLock = [0, 0, 0];
+    this.showBanner("ゲージ全快");
+  }
+
   private leave(message: string): void {
     this.registry.set("message", message);
     session.net.disconnect();
@@ -171,15 +261,16 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
-    const input = this.readLocalInput();
+    this.pollEdges();
 
     if (this.isHost) {
-      this.inputs[this.me] = input;
       const scale = this.slowmo > 0 ? KILL_SLOWMO_SCALE : 1;
       this.slowmo = Math.max(0, this.slowmo - dt);
       this.accumulator += dt * scale;
       while (this.accumulator >= DT) {
         this.accumulator -= DT;
+        // tickごとにラッチを1回消費する（押した入力が踏み潰されない）
+        this.inputs[this.me] = this.readLocalInput(true);
         for (const b of session.bots) {
           const mem = this.botMems.get(b.id);
           if (mem) this.inputs[b.id] = botInput(this.state, b.id, b.level, mem);
@@ -190,7 +281,7 @@ export class GameScene extends Phaser.Scene {
         // エッジ入力は1tickで消費
         for (const id of Object.keys(this.inputs)) {
           const i = this.inputs[id]!;
-          if (i.switchWeapon || i.skill1 || i.skill2 || i.skill3) this.inputs[id] = { ...i, switchWeapon: false, skill1: false, skill2: false, skill3: false };
+          if (i.skill1 || i.skill2 || i.skill3) this.inputs[id] = { ...i, skill1: false, skill2: false, skill3: false };
         }
       }
       if (session.mode === "online") {
@@ -207,12 +298,13 @@ export class GameScene extends Phaser.Scene {
       this.inputTimer += dt;
       if (this.inputTimer >= 1 / INPUT_HZ) {
         this.inputTimer = 0;
-        session.net.sendGame({ type: "input", input }, this.hostId());
+        session.net.sendGame({ type: "input", input: this.readLocalInput(true) }, this.hostId());
       }
       // クライアント予測: 自機の移動をローカル入力で先行させ、権威スナップショットへ吸着
       const meAuth = this.state.players.find((p) => p.id === this.me);
       if (meAuth && isAlive(meAuth)) {
         if (!this.predicted) this.predicted = { x: meAuth.x, y: meAuth.y };
+        const input = this.readLocalInput(false);
         let mx = input.mx, my = input.my;
         const len = Math.hypot(mx, my);
         if (len > 1) { mx /= len; my /= len; }
@@ -250,24 +342,55 @@ export class GameScene extends Phaser.Scene {
     return session.net.members.find((m) => m.host)?.id;
   }
 
-  private readLocalInput(): PlayerInput {
+  private bindDown(b: Bind): boolean {
+    if (b.key) return b.key.isDown;
+    return (this.input.activePointer.buttons & (b.mask ?? 0)) !== 0;
+  }
+
+  /** 押した瞬間だけtrue（キーはJustDown、マウスは前フレームとの比較） */
+  private bindEdge(b: Bind, action: BindAction): boolean {
+    if (b.key) return Phaser.Input.Keyboard.JustDown(b.key);
+    const now = this.bindDown(b);
+    const was = this.mouseEdges[action] ?? false;
+    this.mouseEdges[action] = now;
+    return now && !was;
+  }
+
+  /**
+   * 押した瞬間の入力をラッチに溜める（裁定11）。
+   * 毎フレーム呼ぶ。tickや送信が走らないフレームで拾ったエッジも消えずに残るので、
+   * 高リフレッシュレート環境でもスキルが不発にならない。
+   */
+  private pollEdges(): void {
+    if (this.bindEdge(this.keys.skill1, "skill1")) this.latch.skill1 = true;
+    if (this.bindEdge(this.keys.skill2, "skill2")) this.latch.skill2 = true;
+    if (this.bindEdge(this.keys.skill3, "skill3")) this.latch.skill3 = true;
+  }
+
+  /** ラッチを1回ぶん消費して入力を組み立てる */
+  private readLocalInput(consume: boolean): PlayerInput {
     const me = this.stateFor(this.me);
     const ptr = this.input.activePointer;
     const aim = me ? Math.atan2(ptr.worldY - me.y, ptr.worldX - me.x) : 0;
-    const rightNow = ptr.rightButtonDown();
-    const rightEdge = rightNow && !this.prevRight;
-    this.prevRight = rightNow;
-    return {
-      mx: (this.keys.right.isDown ? 1 : 0) - (this.keys.left.isDown ? 1 : 0),
-      my: (this.keys.down.isDown ? 1 : 0) - (this.keys.up.isDown ? 1 : 0),
+    if (this.menuOpen) {
+      // メニュー操作が攻撃・移動として飛ばないよう、開いている間は無入力にする
+      this.latch = { skill1: false, skill2: false, skill3: false };
+      return { ...NULL_INPUT, aim };
+    }
+    const input: PlayerInput = {
+      mx: (this.bindDown(this.keys.right) ? 1 : 0) - (this.bindDown(this.keys.left) ? 1 : 0),
+      my: (this.bindDown(this.keys.down) ? 1 : 0) - (this.bindDown(this.keys.up) ? 1 : 0),
       aim,
+      // 裁定10: 左クリック=主武器 / 右クリック=副武器
       fire: ptr.leftButtonDown(),
-      guard: this.keys.guard.isDown,
-      switchWeapon: Phaser.Input.Keyboard.JustDown(this.keys.switchWeapon) || rightEdge,
-      skill1: Phaser.Input.Keyboard.JustDown(this.keys.skill1),
-      skill2: Phaser.Input.Keyboard.JustDown(this.keys.skill2),
-      skill3: Phaser.Input.Keyboard.JustDown(this.keys.skill3),
+      fire2: ptr.rightButtonDown(),
+      guard: this.bindDown(this.keys.guard),
+      skill1: this.latch.skill1,
+      skill2: this.latch.skill2,
+      skill3: this.latch.skill3,
     };
+    if (consume) this.latch = { skill1: false, skill2: false, skill3: false };
+    return input;
   }
 
   private stateFor(id: PlayerId): PlayerState | undefined {
@@ -506,7 +629,8 @@ export class GameScene extends Phaser.Scene {
     // HUD
     const me = to.players.find((p) => p.id === this.me);
     const tl = Math.ceil(to.timeLeft);
-    const clock = `${Math.floor(tl / 60)}:${String(tl % 60).padStart(2, "0")}`;
+    // 訓練場に制限時間の概念はないので時計を出さない（裁定14）
+    const clock = session.mode === "solo" ? "訓練場" : `${Math.floor(tl / 60)}:${String(tl % 60).padStart(2, "0")}`;
     if (to.mode === "teams" && me) {
       const myPool = to.teamLives[me.team] ?? 0;
       const foeTeam = Object.keys(to.teamLives).map(Number).find((t) => t !== me.team);
@@ -598,11 +722,25 @@ export class GameScene extends Phaser.Scene {
 
     // 世界側に乗せる「敵にも見える情報」（SPEC 13章）
     if (p.swingT > 0) {
-      // 近接の振りアーク
-      g.lineStyle(4, bodyColor, 0.8);
+      const m = meleeVisual(p.cls);
+      // 扇の範囲（薄く・敵からも見える）
+      g.fillStyle(bodyColor, 0.1);
+      g.slice(x, y, m.reach + r, p.aim - m.arc, p.aim + m.arc, false);
+      g.fillPath();
+      g.lineStyle(1, bodyColor, 0.35);
       g.beginPath();
-      g.arc(x, y, r + 16, p.aim - 1.0, p.aim + 1.0, false);
+      g.arc(x, y, m.reach + r, p.aim - m.arc, p.aim + m.arc, false);
       g.strokePath();
+      // 棒本体: キャラ中心から前方に伸ばして振る
+      if (p.swingAngle !== null) {
+        const a = p.aim + p.swingAngle;
+        g.lineStyle(6, 0xffffff, 0.95);
+        g.lineBetween(x, y, x + Math.cos(a) * (m.reach + r), y + Math.sin(a) * (m.reach + r));
+        // 残像（直前の角度側へ薄く）
+        const trail = p.aim + p.swingAngle * 0.75;
+        g.lineStyle(4, bodyColor, 0.45);
+        g.lineBetween(x, y, x + Math.cos(trail) * (m.reach + r) * 0.92, y + Math.sin(trail) * (m.reach + r) * 0.92);
+      }
     }
     if (p.chargeT > 0) {
       // 溜め発光（溜め量に比例）
@@ -671,4 +809,11 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(color, 1);
     g.fillCircle(x, y, b.radius);
   }
+}
+
+/** 近接の見た目仕様（判定と同じ数値を balance.ts から引く） */
+function meleeVisual(cls: CharClass): { reach: number; arc: number } {
+  if (cls === "speed") return { reach: BALANCE.saber.reach, arc: BALANCE.saber.arcRadians };
+  if (cls === "heavy") return { reach: BALANCE.knife.reach, arc: BALANCE.knife.arcRadians };
+  return { reach: BALANCE.jab.reach, arc: BALANCE.jab.arcRadians };
 }

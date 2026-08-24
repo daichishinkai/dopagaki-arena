@@ -31,18 +31,29 @@ function duel(aCls: "speed" | "heavy" | "support", bCls: "speed" | "heavy" | "su
   return s;
 }
 
+/** 左クリック＝主武器（セイバー/HMG/狙撃） */
 const fire = { ...NULL_INPUT, aim: 0, fire: true };
+/** 右クリック＝副武器（ピストル/ナイフ/ジャブ） */
+const fire2 = { ...NULL_INPUT, aim: 0, fire2: true };
+
+/** 支援型の単クリック（裁定10: 溜めなしで離す＝ヒール）。1tickだけ押して離す */
+function tapFire(state: SimState, seconds: number, id = "a") {
+  const r1 = step(state, { [id]: { ...NULL_INPUT, aim: 0, fire: true } }, DT);
+  const r2 = run(r1.state, { [id]: { ...NULL_INPUT, aim: 0 } }, seconds);
+  return { state: r2.state, events: [...r1.events, ...r2.events] };
+}
 
 describe("クラス基礎（SPEC 16章）", () => {
   it("横断速度: 速1.2秒 / 重2.0秒 / 支1.5秒", () => {
-    expect(moveSpeedOf("speed")).toBeCloseTo(1280 / 1.2);
-    expect(moveSpeedOf("heavy")).toBeCloseTo(1280 / 2.0);
-    expect(moveSpeedOf("support")).toBeCloseTo(1280 / 1.5);
+    // 世界スケール（裁定12）で一律に遅くなるが、クラス間の比は不変
+    expect(moveSpeedOf("speed") / moveSpeedOf("support")).toBeCloseTo(1.5 / 1.2);
+    expect(moveSpeedOf("heavy") / moveSpeedOf("support")).toBeCloseTo(1.5 / 2.0);
+    expect(moveSpeedOf("support")).toBeCloseTo(1280 / BALANCE.classes.support.crossSeconds);
   });
   it("武器構成", () => {
     expect(WEAPONS.speed).toEqual(["saber", "pistol"]);
     expect(WEAPONS.heavy).toEqual(["hmg", "knife"]);
-    expect(WEAPONS.support).toEqual(["sniper", "heal", "jab"]);
+    expect(WEAPONS.support).toEqual(["sniper", "jab"]); // 裁定10: ヒールは左クリックの単クリック
   });
   it("重量型のシールドは時間回復しない（命中でのみ回復）", () => {
     const s = duel("heavy", "support");
@@ -64,14 +75,12 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
   });
   it("マーク: ピストルヒットで付与（最大3・4秒）→ セイバー初撃で全消費 +4ダメ/枚・逃げゲージ+8/枚", () => {
     const s = duel("speed", "support", 200);
-    s.players[0]!.weapon = 1;
     // 3発当ててマーク3
-    const r1 = run(s, { a: fire }, 1.0);
+    const r1 = run(s, { a: fire2 }, 1.0);
     expect(r1.state.players[1]!.marks?.stacks).toBe(3);
     // 近づいてセイバー
     const s2 = r1.state;
-    s2.players[0]!.x = s2.players[1]!.x - 50;
-    s2.players[0]!.weapon = 0;
+    s2.players[0]!.x = s2.players[1]!.x - BALANCE.saber.reach * 0.5;
     s2.players[0]!.escapeGauge = 40;
     const r2 = run(s2, { a: fire }, 0.12); // 初撃(0.05s)のみ
     const hit = r2.events.find((e) => e.type === "hit" && e.melee);
@@ -81,22 +90,20 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
   });
   it("マークは4秒で消える", () => {
     const s = duel("speed", "support", 200);
-    s.players[0]!.weapon = 1;
-    const r1 = run(s, { a: { ...fire } }, 0.4); // 1〜2発
+    const r1 = run(s, { a: { ...fire2 } }, 0.4); // 1〜2発
     expect(r1.state.players[1]!.marks).not.toBeNull();
-    const r2 = run(r1.state, {}, 4.1);
+    const r2 = run(r1.state, {}, 5.0); // 着弾時刻＋4秒を確実に超える
     expect(r2.state.players[1]!.marks).toBeNull();
   });
   it("過装填: 次の2発が3倍（6→18）、4秒で失効", () => {
     const s = duel("speed", "support", 100);
-    s.players[0]!.weapon = 1;
-    s.players[1]!.y += 18; // 中心ヒットを外す
-    const r1 = run(s, { a: { ...fire, skill3: true } }, 0.7); // 発動+2発
+    s.players[1]!.y += BALANCE.player.radius * 0.75; // 中心ヒットを外す
+    const r1 = run(s, { a: { ...fire2, skill3: true } }, 0.7); // 発動+2発
     const dmgs = r1.events.filter((e) => e.type === "hit" && !e.melee).map((e) => (e.type === "hit" ? e.damage : 0));
     expect(dmgs[0]).toBeCloseTo(18);
     expect(dmgs[1]).toBeCloseTo(18);
     // 3発目は通常
-    const r2 = run(r1.state, { a: fire }, 0.4);
+    const r2 = run(r1.state, { a: fire2 }, 0.4);
     const d3 = r2.events.find((e) => e.type === "hit" && !e.melee);
     expect(d3 && d3.type === "hit" && d3.damage).toBeCloseTo(6);
   });
@@ -105,7 +112,7 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
     const a = s.players[0]!;
     const x0 = a.x;
     const r = run(s, { a: { ...NULL_INPUT, aim: 0, skill1: true } }, DT * 2);
-    expect(r.state.players[0]!.x - x0).toBeCloseTo(1280 * 0.12, 0);
+    expect(r.state.players[0]!.x - x0).toBeCloseTo(1280 * BALANCE.speedSkills.dash.distanceRatio, 0);
     expect(r.state.players[0]!.escapeGauge).toBeLessThanOrEqual(100 - 35 + 1);
   });
   it("スモーク: 逃げゲージ30・持続2秒", () => {
@@ -135,13 +142,12 @@ describe("重量型: HMG・ナイフ・統合ゲージ（SPEC 6.2）", () => {
     expect(p.shield).toBeCloseTo(totalDmg * 0.5, 1);
   });
   it("ナイフ: 20ダメ・命中でゲージ+20", () => {
-    const s = duel("heavy", "support", 50);
-    s.players[0]!.weapon = 1;
+    const s = duel("heavy", "support", BALANCE.knife.reach * 0.6);
     s.players[0]!.unifiedGauge = 100;
-    const r = run(s, { a: fire }, 0.35);
+    const r = run(s, { a: fire2 }, 0.5); // 掃きの中心通過は0.3秒
     const hit = r.events.find((e) => e.type === "hit" && e.melee);
     expect(hit && hit.type === "hit" && hit.damage).toBeCloseTo(20);
-    expect(r.state.players[0]!.unifiedGauge).toBeCloseTo(100 + 20 + 10 * 0.35, 0);
+    expect(r.state.players[0]!.unifiedGauge).toBeCloseTo(100 + 20 + 10 * 0.5, 0);
   });
   it("ガード被弾は統合ゲージから減る（射撃25）", () => {
     const s = duel("support", "heavy", 300);
@@ -149,9 +155,7 @@ describe("重量型: HMG・ナイフ・統合ゲージ（SPEC 6.2）", () => {
     b.guarding = true;
     b.guardStartedAt = -1;
     b.unifiedGauge = 100;
-    s.players[0]!.weapon = 2; // 素手は届かないので b は被弾しない…ではなく a を狙撃に
-    s.players[0]!.weapon = 0;
-    // 最大溜めで1発
+    // 最大溜めで1発（支援の左クリック＝狙撃）
     const r1 = run(s, { a: fire, b: { ...NULL_INPUT, guard: true } }, 1.6);
     const r2 = run(r1.state, { a: { ...NULL_INPUT, aim: 0 }, b: { ...NULL_INPUT, guard: true } }, 0.5);
     const guardedHit = [...r1.events, ...r2.events].find((e) => e.type === "hit" && e.guarded);
@@ -184,12 +188,11 @@ describe("重量型: HMG・ナイフ・統合ゲージ（SPEC 6.2）", () => {
   });
   it("ブレイク硬直は半減（0.3秒）", () => {
     const s = duel("speed", "heavy", 100);
-    s.players[0]!.weapon = 1;
     const b = s.players[1]!;
     b.guarding = true;
     b.guardStartedAt = -1;
     b.unifiedGauge = 25;
-    const r = run(s, { a: fire, b: { ...NULL_INPUT, guard: true } }, 0.1);
+    const r = run(s, { a: fire2, b: { ...NULL_INPUT, guard: true } }, 0.1);
     const brk = r.events.find((e) => e.type === "guardBreak");
     expect(brk).toBeTruthy();
     // 直後の残り硬直は 0.3 以下（重量型は0.6の半減）
@@ -237,10 +240,10 @@ describe("支援型: スナイパー・回復弾・素手（SPEC 6.3）", () => 
     ]);
     const [a, ally, b] = s.players as [any, any, any];
     ally.team = a.team; // 同チーム化
-    a.x = 200; a.y = 360; a.aim = 0; a.weapon = 1;
+    a.x = 200; a.y = 360; a.aim = 0;
     ally.x = 500; ally.y = 360; ally.hp = 50;
     b.x = 900; b.y = 600;
-    const r = run(s, { a: fire }, 0.8);
+    const r = tapFire(s, 0.8);
     const heal = r.events.find((e) => e.type === "heal");
     expect(heal && heal.type === "heal" && heal.amount).toBe(12);
     expect(r.state.players[1]!.hp).toBe(62);
@@ -252,21 +255,20 @@ describe("支援型: スナイパー・回復弾・素手（SPEC 6.3）", () => 
     ]);
     const [a2, ally2, b2] = s2.players as [any, any, any];
     ally2.team = a2.team;
-    a2.x = 200; a2.y = 360; a2.aim = 0; a2.weapon = 1;
+    a2.x = 200; a2.y = 360; a2.aim = 0;
     b2.x = 400; b2.y = 360; // 間に立つ敵
     ally2.x = 700; ally2.y = 360; ally2.hp = 50;
-    const r2 = run(s2, { a: fire }, 0.8);
+    const r2 = tapFire(s2, 0.8);
     expect(r2.events.filter((e) => e.type === "heal")).toHaveLength(0);
     expect(r2.state.players[2]!.hp).toBe(100); // ダメージ0
     expect(r2.state.players[1]!.hp).toBe(50);
   });
   it("素手: 8ダメ・HP+3スティール（秒間キャップ8）・シールドは回復しない（置換）", () => {
-    const s = duel("support", "support", 40);
-    s.players[0]!.weapon = 2;
+    const s = duel("support", "support", BALANCE.jab.reach * 0.7);
     s.players[0]!.hp = 50;
     s.players[0]!.shield = 0;
     s.players[0]!.lastDamagedAt = 999; // 時間回復を無効化してスティール分だけを見る
-    const r = run(s, { a: fire }, 2.0); // 4振り
+    const r = run(s, { a: fire2 }, 2.0); // 4振り
     const hits = r.events.filter((e) => e.type === "hit" && e.melee);
     expect(hits.length).toBe(4);
     expect(hits[0]!.type === "hit" && hits[0]!.damage).toBeCloseTo(8);

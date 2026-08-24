@@ -7,10 +7,11 @@ export interface PlayerInput {
   mx: number;
   my: number;
   aim: number;
+  /** 左クリック＝主武器（裁定10） */
   fire: boolean;
+  /** 右クリック＝副武器（裁定10） */
+  fire2: boolean;
   guard: boolean;
-  /** 立ち上がりエッジで送る（押した瞬間のみ true） */
-  switchWeapon: boolean;
   skill1: boolean;
   skill2: boolean;
   skill3: boolean;
@@ -21,8 +22,8 @@ export const NULL_INPUT: PlayerInput = {
   my: 0,
   aim: 0,
   fire: false,
+  fire2: false,
   guard: false,
-  switchWeapon: false,
   skill1: false,
   skill2: false,
   skill3: false,
@@ -53,14 +54,15 @@ export interface PlayerState {
   /** この振り（1連）でガード削りを適用済みか: 振りID */
   lastGuardDrainSwing: number;
 
-  weapon: number; // 速・重: 0/1、支: 0/1/2
-  switchCd: number;
+  /** 直近に使った武器（0=主/左, 1=副/右）。表示・bot判断用（裁定10で切替操作は廃止） */
+  weapon: number;
 
   // 射撃武器
   magazine: number;
   reload: number;
   fireCooldown: number;
   prevFire: boolean;
+  prevFire2: boolean;
 
   // HMG
   hmgSpin: number; // fire押下の継続秒
@@ -71,6 +73,12 @@ export interface PlayerState {
   swingT: number; // 残り秒（0で非スイング）
   swingId: number;
   swingHitsDone: number;
+  /** 掃き判定: 直前tickの棒の角度（p.aim基準の相対角）。非スイング時は null */
+  swingAngle: number | null;
+  /** このスイングで既に1回以上当てた相手（マーク回収の初撃判定用） */
+  swingHitIds: PlayerId[];
+  /** 近接を出したのが副武器（右クリック）か。表示と武器判定に使う */
+  swingSub: boolean;
   eraseCd: number;
   eraseUsedThisSwing: boolean;
 

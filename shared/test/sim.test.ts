@@ -23,7 +23,6 @@ function twoPlayers(): SimState {
     { id: "a", name: "A", cls: "speed" },
     { id: "b", name: "B", cls: "support" },
   ]);
-  for (const p of s.players) p.weapon = 1; // ピストル（スピード型の武器1）
   return s;
 }
 
@@ -59,13 +58,13 @@ describe("balance.ts は SPEC.md 16章と一致する", () => {
 });
 
 describe("移動", () => {
-  it("1秒で画面幅の2/3進む（横断1.5秒）", () => {
+  it("1秒で横断秒ぶんの距離を進む（支援型: 画面幅/crossSeconds）", () => {
     const s0 = createMatch([{ id: "a", name: "A", cls: "support" }]);
     const p0 = s0.players[0]!;
     const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1 } }, 1);
     const moved = state.players[0]!.x - p0.x;
-    expect(moved).toBeCloseTo(BALANCE.field.width * (2 / 3), 0);
-    expect(MOVE_SPEED).toBeCloseTo(BALANCE.field.width / 1.5);
+    expect(moved).toBeCloseTo(BALANCE.field.width / BALANCE.classes.support.crossSeconds, 0);
+    expect(MOVE_SPEED).toBeCloseTo(BALANCE.field.width / BALANCE.classes.support.crossSeconds);
   });
   it("斜め入力でも速度は同じ", () => {
     const s0 = createMatch([{ id: "a", name: "A", cls: "support" }]);
@@ -86,23 +85,21 @@ describe("移動", () => {
 describe("ピストル", () => {
   it("1秒間に3発しか撃てない", () => {
     const s0 = createMatch([{ id: "a", name: "A", cls: "speed" }]);
-    s0.players[0]!.weapon = 1;
-    const { events } = run(s0, { a: { ...NULL_INPUT, fire: true } }, 1 - DT / 2);
+    const { events } = run(s0, { a: { ...NULL_INPUT, fire2: true } }, 1 - DT / 2);
     expect(events.filter((e) => e.type === "shoot")).toHaveLength(3);
   });
   it("8発撃つとリロード（1.2秒）に入り、その間は撃てない", () => {
     const s0 = createMatch([{ id: "a", name: "A", cls: "speed" }]);
-    s0.players[0]!.weapon = 1;
     // 8発目は 7/3 秒後に出る。少し余裕を持って回す
-    const r1 = run(s0, { a: { ...NULL_INPUT, fire: true } }, 8 / 3 - 0.05);
+    const r1 = run(s0, { a: { ...NULL_INPUT, fire2: true } }, 8 / 3 - 0.05);
     expect(r1.events.filter((e) => e.type === "shoot")).toHaveLength(8);
     const p = r1.state.players[0]!;
     expect(p.magazine).toBe(0);
     expect(p.reload).toBeGreaterThan(0);
     expect(p.reload).toBeLessThanOrEqual(1.2);
-    const r2 = run(r1.state, { a: { ...NULL_INPUT, fire: true } }, 1.0);
+    const r2 = run(r1.state, { a: { ...NULL_INPUT, fire2: true } }, 1.0);
     expect(r2.events.filter((e) => e.type === "shoot")).toHaveLength(0);
-    const r3 = run(r2.state, { a: { ...NULL_INPUT, fire: true } }, 0.4);
+    const r3 = run(r2.state, { a: { ...NULL_INPUT, fire2: true } }, 0.4);
     expect(r3.events.filter((e) => e.type === "shoot").length).toBeGreaterThanOrEqual(1);
     expect(r3.state.players[0]!.magazine).toBeLessThanOrEqual(7);
   });
@@ -110,12 +107,13 @@ describe("ピストル", () => {
 
 describe("距離減衰3段（SPEC 6.1）", () => {
   const w = BALANCE.field.width;
-  it("〜12% = 1.0 / 12〜35% = 0.75 / 35%〜 = 0.5", () => {
+  it("3段の境界が falloff 定義と一致する（世界スケール追従）", () => {
+    const [near, mid] = BALANCE.pistol.falloff;
     expect(falloffMultiplier(0)).toBe(1.0);
-    expect(falloffMultiplier(w * 0.12)).toBe(1.0);
-    expect(falloffMultiplier(w * 0.2)).toBe(0.75);
-    expect(falloffMultiplier(w * 0.35)).toBe(0.75);
-    expect(falloffMultiplier(w * 0.5)).toBe(0.5);
+    expect(falloffMultiplier(w * near!.maxRatio)).toBe(1.0);
+    expect(falloffMultiplier(w * (near!.maxRatio + mid!.maxRatio) / 2)).toBe(0.75);
+    expect(falloffMultiplier(w * mid!.maxRatio)).toBe(0.75);
+    expect(falloffMultiplier(w * mid!.maxRatio + 1)).toBe(0.5);
   });
 });
 
@@ -145,7 +143,7 @@ describe("ダメージ・シールド", () => {
     a.aim = 0;
     a.shield = 0;
     a.lastDamagedAt = 0; // 回復遅延中にして自然回復を除外
-    const { state, events } = run(s0, { a: { ...NULL_INPUT, aim: 0, fire: true } }, 0.2);
+    const { state, events } = run(s0, { a: { ...NULL_INPUT, aim: 0, fire2: true } }, 0.2);
     const hits = events.filter((e) => e.type === "hit");
     expect(hits).toHaveLength(1);
     expect(hits[0]!.type === "hit" && hits[0]!.damage).toBe(6);
@@ -159,7 +157,7 @@ describe("ダメージ・シールド", () => {
     const b = s0.players[1]!;
     a.x = b.x - 80;
     a.y = b.y;
-    const { state, events } = run(s0, { a: { ...NULL_INPUT, aim: 0, fire: true } }, 0.2);
+    const { state, events } = run(s0, { a: { ...NULL_INPUT, aim: 0, fire2: true } }, 0.2);
     const hit = events.find((e) => e.type === "hit");
     expect(hit && hit.type === "hit" && hit.center).toBe(true);
     expect(state.players[1]!.shield).toBe(41);
@@ -187,7 +185,7 @@ describe("防御（三すくみ: 射撃 > 防御）", () => {
     a.y = b.y;
     s0.players[1]!.guarding = true;
     s0.players[1]!.guardStartedAt = -1; // ジャスガ猶予(0.1秒)を過ぎた通常ガード
-    const inputs = { a: { ...NULL_INPUT, aim: 0, fire: true }, b: { ...NULL_INPUT, guard: true } };
+    const inputs = { a: { ...NULL_INPUT, aim: 0, fire2: true }, b: { ...NULL_INPUT, guard: true } };
     const r = run(s0, inputs, 1.15); // 4発（0, 1/3, 2/3, 1秒）＋弾の到達分
     const hits = r.events.filter((e) => e.type === "hit");
     expect(hits.length).toBe(4);
@@ -226,7 +224,7 @@ describe("残機・リスポーン・勝敗", () => {
     s.players[0]!.y = s.players[1]!.y;
     const events = [];
     for (let i = 0; i < 60 * 30; i++) {
-      const rr = step(s, { a: { ...NULL_INPUT, aim: 0, fire: true } }, DT);
+      const rr = step(s, { a: { ...NULL_INPUT, aim: 0, fire2: true } }, DT);
       s = rr.state;
       events.push(...rr.events);
       if (rr.events.some((e) => e.type === "kill")) return { state: s, events };
@@ -257,10 +255,9 @@ describe("残機・リスポーン・勝敗", () => {
     b.invuln = 1;
     s0.players[0]!.x = b.x - 80;
     s0.players[0]!.y = b.y;
-    const r = run(s0, { a: { ...NULL_INPUT, aim: 0, fire: true } }, 0.3);
+    const r = run(s0, { a: { ...NULL_INPUT, aim: 0, fire2: true } }, 0.3);
     expect(r.state.players[1]!.shield).toBe(50);
-    r.state.players[1]!.weapon = 2; // 素手（攻撃の発生が最速）
-    const r2 = run(r.state, { b: { ...NULL_INPUT, aim: Math.PI, fire: true } }, 0.05);
+    const r2 = run(r.state, { b: { ...NULL_INPUT, aim: Math.PI, fire2: true } }, 0.05); // ジャブ（発生最速）
     expect(r2.state.players[1]!.invuln).toBe(0);
   });
   it("残機を使い切ると試合終了、勝者は相手", () => {
@@ -274,7 +271,7 @@ describe("残機・リスポーン・勝敗", () => {
       const b = s.players[1]!;
       const aa = s.players[0]!;
       const aim = Math.atan2(b.y - aa.y, b.x - aa.x);
-      const rr = step(s, { a: { ...NULL_INPUT, aim, fire: true } }, DT);
+      const rr = step(s, { a: { ...NULL_INPUT, aim, fire2: true } }, DT);
       s = rr.state;
       if (rr.events.some((e) => e.type === "matchEnd")) ended = true;
     }

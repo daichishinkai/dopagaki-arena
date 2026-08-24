@@ -52,15 +52,13 @@ export function button(scene: Phaser.Scene, x: number, y: number, text: string, 
   };
 }
 
-/** DOMの入力欄（ルームコード用） */
-export function textInput(scene: Phaser.Scene, x: number, y: number, placeholder: string, maxLength: number): Phaser.GameObjects.DOMElement {
-  const el = document.createElement("input");
-  el.type = "text";
-  el.placeholder = placeholder;
-  el.maxLength = maxLength;
-  el.autocomplete = "off";
-  el.style.cssText =
-    "width:280px;padding:12px;font-size:24px;text-align:center;letter-spacing:6px;text-transform:uppercase;" +
-    "background:#0b1a26;color:#e5e7eb;border:2px solid #22d3ee;border-radius:10px;outline:none;font-family:monospace;";
-  return scene.add.dom(x, y, el);
+/** セクション枠（角丸パネル＋見出し）。x,y は中心座標 */
+export function panel(scene: Phaser.Scene, x: number, y: number, w: number, h: number, heading: string): void {
+  const g = scene.add.graphics();
+  g.lineStyle(1, 0x1e3a4d, 1).fillStyle(0x0a1420, 0.6);
+  g.fillRoundedRect(x - w / 2, y - h / 2, w, h, 14);
+  g.strokeRoundedRect(x - w / 2, y - h / 2, w, h, 14);
+  scene.add
+    .text(x, y - h / 2 + 28, heading, { fontFamily: FONT, fontSize: "20px", color: "#7dd3fc", fontStyle: "bold" })
+    .setOrigin(0.5);
 }

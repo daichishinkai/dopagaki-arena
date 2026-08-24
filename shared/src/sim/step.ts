@@ -22,7 +22,8 @@ const G = BALANCE.guard;
 export const WEAPONS: Record<CharClass, ReadonlyArray<string>> = {
   speed: ["saber", "pistol"],
   heavy: ["hmg", "knife"],
-  support: ["sniper", "heal", "jab"],
+  // 裁定10: 支援型の左は「狙撃/ヒール」融合枠、右はジャブ。ヒールは単クリックで発射される
+  support: ["sniper", "jab"],
 };
 
 const SPAWNS: ReadonlyArray<{ x: number; y: number }> = [
@@ -74,17 +75,20 @@ export function createPlayer(id: PlayerId, name: string, cls: CharClass, slot: n
     guardBreak: 0,
     lastGuardDrainSwing: -1,
     weapon: 0,
-    switchCd: 0,
     magazine: cls === "heavy" ? BALANCE.hmg.magazine : BALANCE.pistol.magazine,
     reload: 0,
     fireCooldown: 0,
     prevFire: false,
+    prevFire2: false,
     hmgSpin: 0,
     hmgFireHeld: 0,
     hmgSinceStop: Infinity,
     swingT: 0,
     swingId: 0,
     swingHitsDone: 0,
+    swingAngle: null,
+    swingHitIds: [],
+    swingSub: false,
     eraseCd: 0,
     eraseUsedThisSwing: false,
     chargeT: 0,
@@ -341,37 +345,131 @@ function fireHeal(state: SimState, p: PlayerState, events: SimEvent[]): void {
   events.push({ type: "shoot", owner: p.id, x: p.x, y: p.y, kind: "heal" });
 }
 
-function startSwing(p: PlayerState, events: SimEvent[]): void {
-  const total = p.cls === "speed" ? BALANCE.saber.swingSeconds : p.cls === "heavy" ? BALANCE.knife.swingSeconds : BALANCE.jab.swingSeconds;
-  p.swingT = total;
+function startSwing(p: PlayerState, sub: boolean, events: SimEvent[]): void {
+  const spec = meleeSpec(p.cls);
+  p.swingT = spec.total;
   p.swingId += 1;
   p.swingHitsDone = 0;
+  p.swingHitIds = [];
+  p.swingSub = sub;
+  p.swingAngle = stickAngleAt(spec, 0);
   p.eraseUsedThisSwing = false;
   p.invuln = 0;
   events.push({ type: "swing", owner: p.id });
 }
 
-function meleeSpec(cls: CharClass): { total: number; hitTimes: ReadonlyArray<number>; damage: number; reach: number; arc: number } {
-  if (cls === "speed") return { total: BALANCE.saber.swingSeconds, hitTimes: BALANCE.saber.hitTimes, damage: BALANCE.saber.damagePerHit, reach: BALANCE.saber.reach, arc: BALANCE.saber.arcRadians };
-  if (cls === "heavy") return { total: BALANCE.knife.swingSeconds, hitTimes: [BALANCE.knife.hitTime], damage: BALANCE.knife.damage, reach: BALANCE.knife.reach, arc: BALANCE.knife.arcRadians };
-  return { total: BALANCE.jab.swingSeconds, hitTimes: [BALANCE.jab.hitTime], damage: BALANCE.jab.damage, reach: BALANCE.jab.reach, arc: BALANCE.jab.arcRadians };
+/**
+ * 1つの武器スロットを処理する（裁定10）。
+ * sub=false は左クリック（主武器）、sub=true は右クリック（副武器）。
+ * 近接はスイング中に他方を出せないよう swingT で自然に排他になる。
+ */
+function useWeapon(
+  state: SimState,
+  p: PlayerState,
+  w: string,
+  sub: boolean,
+  down: boolean,
+  prevDown: boolean,
+  input: PlayerInput,
+  dt: number,
+  events: SimEvent[],
+): void {
+  if (down) p.weapon = sub ? 1 : 0;
+  if (w === "pistol") {
+    if (down) firePistol(state, p, events);
+  } else if (w === "hmg") {
+    if (down) fireHmg(state, p, dt, events);
+  } else if (w === "sniper") {
+    // 支援型の左クリック: 押している間だけ溜め、離した瞬間の溜め時間で3分岐
+    if (down) {
+      if (p.swingT > 0) return; // ジャブ中は溜めない
+      p.chargeT += dt;
+      if (p.chargeT >= BALANCE.sniper.chargeMax) {
+        p.holdT += dt;
+        if (p.holdT >= BALANCE.sniper.holdMaxSeconds) releaseSupportPrimary(state, p, events); // 超過で自動発射
+      }
+    } else if (prevDown) {
+      releaseSupportPrimary(state, p, events);
+    }
+  } else if (w === "heal") {
+    if (down) fireHeal(state, p, events);
+  } else {
+    // 近接（saber / knife / jab）
+    if (down && p.swingT <= 0) startSwing(p, sub, events);
+  }
 }
 
-function inArc(p: PlayerState, target: PlayerState, reach: number, arc: number): boolean {
+/**
+ * 支援型の左クリックを離したときの分岐（裁定10）。
+ * 単クリック(<tapSeconds)=ヒール / それ以上 chargeMin 未満=不発（溜めフェイント） / chargeMin 以上=狙撃
+ */
+function releaseSupportPrimary(state: SimState, p: PlayerState, events: SimEvent[]): void {
+  const S = BALANCE.sniper;
+  const charge = p.chargeT;
+  if (charge < S.tapSeconds) {
+    p.chargeT = 0;
+    p.holdT = 0;
+    fireHeal(state, p, events);
+    return;
+  }
+  releaseSniper(state, p, events); // chargeMin 未満なら中で不発になる
+}
+
+interface MeleeSpec {
+  total: number;
+  damage: number;
+  reach: number;
+  arc: number;
+  /** 棒が扇を掃く区間。passes=往復数×2（片道1パス） */
+  sweep: { start: number; passes: number; passSeconds: number };
+}
+
+function meleeSpec(cls: CharClass): MeleeSpec {
+  if (cls === "speed") return { total: BALANCE.saber.swingSeconds, damage: BALANCE.saber.damagePerHit, reach: BALANCE.saber.reach, arc: BALANCE.saber.arcRadians, sweep: BALANCE.saber.sweep };
+  if (cls === "heavy") return { total: BALANCE.knife.swingSeconds, damage: BALANCE.knife.damage, reach: BALANCE.knife.reach, arc: BALANCE.knife.arcRadians, sweep: BALANCE.knife.sweep };
+  return { total: BALANCE.jab.swingSeconds, damage: BALANCE.jab.damage, reach: BALANCE.jab.reach, arc: BALANCE.jab.arcRadians, sweep: BALANCE.jab.sweep };
+}
+
+/**
+ * 経過時間における棒の角度（p.aim からの相対角）。掃き区間外は null。
+ * パスごとに向きが反転するので、passes=4 なら「左端→右端→左端→右端→左端」の2往復になる。
+ */
+export function stickAngleAt(spec: MeleeSpec, elapsed: number): number | null {
+  const { start, passes, passSeconds } = spec.sweep;
+  const rel = elapsed - start;
+  if (rel < 0 || rel > passes * passSeconds) return null;
+  const idx = Math.min(passes - 1, Math.floor(rel / passSeconds));
+  const u = (rel - idx * passSeconds) / passSeconds; // 0..1
+  // 偶数パスは -arc → +arc、奇数パスは +arc → -arc
+  return idx % 2 === 0 ? -spec.arc + 2 * spec.arc * u : spec.arc - 2 * spec.arc * u;
+}
+
+/** 相手の相対角（p.aim基準・-PI..PI）。射程外なら null */
+function relAngle(p: PlayerState, target: PlayerState, reach: number): number | null {
   const dx = target.x - p.x;
   const dy = target.y - p.y;
-  if (Math.hypot(dx, dy) > reach + P.radius) return false;
+  if (Math.hypot(dx, dy) > reach + P.radius) return null;
   let da = Math.atan2(dy, dx) - p.aim;
   while (da > Math.PI) da -= Math.PI * 2;
   while (da < -Math.PI) da += Math.PI * 2;
-  return Math.abs(da) <= arc;
+  return da;
 }
 
-function meleeHit(state: SimState, p: PlayerState, hitIndex: number, events: SimEvent[]): void {
+/** 棒が prevA→curA と動く間に相手の角度を横切ったか（裁定13） */
+function stickCrossed(da: number, prevA: number, curA: number): boolean {
+  const lo = Math.min(prevA, curA);
+  const hi = Math.max(prevA, curA);
+  return da >= lo && da <= hi;
+}
+
+/** 棒が prevA→curA と掃いた区間で横切った相手にヒットを入れる（裁定13） */
+function meleeSweepHit(state: SimState, p: PlayerState, prevA: number, curA: number, events: SimEvent[]): void {
   const spec = meleeSpec(p.cls);
   for (const target of state.players) {
     if (target.team === p.team || !isAlive(target)) continue;
-    if (!inArc(p, target, spec.reach, spec.arc)) continue;
+    const da = relAngle(p, target, spec.reach);
+    if (da === null || !stickCrossed(da, prevA, curA)) continue;
+    const firstOnTarget = !p.swingHitIds.includes(target.id);
 
     if (target.guarding) {
       // ジャスガ: 直前0.1秒以内の入力ならゲージ消費なし＋攻撃側を軽くのけぞらせる
@@ -392,12 +490,14 @@ function meleeHit(state: SimState, p: PlayerState, hitIndex: number, events: Sim
 
     let dmg = spec.damage;
     // マーク回収: セイバー初撃が全スタック消費（SPEC 6.1）
-    if (p.cls === "speed" && hitIndex === 0 && target.marks && target.marks.from === p.id && state.t < target.marks.expire) {
+    if (p.cls === "speed" && firstOnTarget && target.marks && target.marks.from === p.id && state.t < target.marks.expire) {
       const stacks = target.marks.stacks;
       dmg += BALANCE.saber.markBonusDamage * stacks;
       p.escapeGauge = Math.min(BALANCE.speedSkills.gaugeMax, p.escapeGauge + BALANCE.saber.markGaugeRefund * stacks);
       target.marks = null;
     }
+    p.swingHitIds.push(target.id);
+    p.swingHitsDone += 1;
     const result = applyDamage(target, dmg);
     target.lastDamagedAt = state.t;
     p.damageDealt += result.total;
@@ -699,6 +799,15 @@ function applyPendingLinks(state: SimState, events: SimEvent[]): void {
         smoke.mist = true;
         at.x = smoke.x;
         at.y = smoke.y;
+        // 成立した瞬間に霧が炸裂する（SPEC 7.2）。
+        // スタン弾が構え0.3秒より先にスモークを通過してしまう配置でも成立効果が消えないようにする。
+        for (const t of state.players) {
+          if (t.team === link.team || !isAlive(t) || t.invuln > 0) continue;
+          if (Math.hypot(t.x - smoke.x, t.y - smoke.y) <= smoke.radius) {
+            applyCC(t, BALANCE.link.mistSignal.stunSeconds);
+            events.push({ type: "hit", target: t.id, attacker: link.owners[0]!, x: t.x, y: t.y, damage: 0, center: false, guarded: false, melee: false });
+          }
+        }
       }
       if (bullet) bullet.mist = true;
     }
@@ -876,7 +985,6 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     p.fireCooldown = Math.max(0, p.fireCooldown - dt);
     p.guardBreak = Math.max(0, p.guardBreak - dt);
     p.invuln = Math.max(0, p.invuln - dt);
-    p.switchCd = Math.max(0, p.switchCd - dt);
     p.eraseCd = Math.max(0, p.eraseCd - dt);
     p.cc = Math.max(0, p.cc - dt);
     p.shell = Math.max(0, p.shell - dt);
@@ -893,7 +1001,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       }
     }
     // HMGスピン維持・拡散リセット
-    if (!(input.fire && p.cls === "heavy" && p.weapon === 0)) {
+    if (!(input.fire && p.cls === "heavy")) {
       p.hmgSinceStop += dt;
       if (p.hmgSinceStop > BALANCE.hmg.spinKeepSeconds) {
         p.hmgSpin = 0;
@@ -906,6 +1014,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       p.respawn -= dt;
       if (p.respawn <= 0) respawnPlayer(state, p, events);
       p.prevFire = input.fire;
+      p.prevFire2 = input.fire2;
       continue;
     }
 
@@ -947,42 +1056,16 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       p.guarding = input.guard && canGuard;
       if (p.guarding && !wasGuarding) p.guardStartedAt = state.t;
 
-      // 武器切替（0.3秒・溜めキャンセル）
-      if (input.switchWeapon && p.switchCd <= 0 && p.swingT <= 0) {
-        p.weapon = (p.weapon + 1) % WEAPONS[p.cls].length;
-        p.switchCd = BALANCE.weaponSwitchSeconds;
-        p.chargeT = 0;
-        p.holdT = 0;
-      }
-
       // スキル
       if (input.skill1) useSkill(state, p, 0, input, events);
       if (input.skill2) useSkill(state, p, 1, input, events);
       if (input.skill3) useSkill(state, p, 2, input, events);
 
-      // 攻撃
-      if (!p.guarding && p.switchCd <= 0) {
-        const w = WEAPONS[p.cls][p.weapon];
-        if (w === "pistol") {
-          if (input.fire) firePistol(state, p, events);
-        } else if (w === "hmg") {
-          if (input.fire) fireHmg(state, p, dt, events);
-        } else if (w === "sniper") {
-          if (input.fire) {
-            p.chargeT += dt;
-            if (p.chargeT >= BALANCE.sniper.chargeMax) {
-              p.holdT += dt;
-              if (p.holdT >= BALANCE.sniper.holdMaxSeconds) releaseSniper(state, p, events); // 超過で自動発射
-            }
-          } else if (p.prevFire) {
-            releaseSniper(state, p, events);
-          }
-        } else if (w === "heal") {
-          if (input.fire) fireHeal(state, p, events);
-        } else {
-          // 近接（saber / knife / jab）
-          if (input.fire && p.swingT <= 0) startSwing(p, events);
-        }
+      // 攻撃（裁定10: 左クリック=主武器 / 右クリック=副武器。武器切替という操作は廃止）
+      if (!p.guarding) {
+        const list = WEAPONS[p.cls];
+        useWeapon(state, p, list[0]!, false, input.fire, p.prevFire, input, dt, events);
+        useWeapon(state, p, list[1]!, true, input.fire2, p.prevFire2, input, dt, events);
       }
     } else {
       p.guarding = false;
@@ -991,15 +1074,16 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     // 近接スイング進行（CC中は startSwing 側で止まる。進行中は継続）
     if (p.swingT > 0) {
       const spec = meleeSpec(p.cls);
-      const prevElapsed = spec.total - p.swingT;
       p.swingT = Math.max(0, p.swingT - dt);
       const elapsed = spec.total - p.swingT;
-      spec.hitTimes.forEach((ht, i) => {
-        if (prevElapsed < ht && elapsed >= ht) {
-          meleeHit(state, p, i, events);
-          p.swingHitsDone += 1;
-        }
-      });
+      // 棒の掃き（裁定13）: 前tickの角度から今tickの角度まで動く間に横切った相手へヒット
+      const curAngle = stickAngleAt(spec, elapsed);
+      if (curAngle !== null) {
+        const prevAngle = p.swingAngle ?? curAngle;
+        meleeSweepHit(state, p, prevAngle, curAngle, events);
+      }
+      p.swingAngle = curAngle;
+      if (p.swingT <= 0) p.swingAngle = null;
       // セイバー弾消し: 0.2〜0.35秒・通常弾のみ・内部CD1.5秒
       if (p.cls === "speed" && p.eraseCd <= 0 && !p.eraseUsedThisSwing) {
         const E = BALANCE.saber.erase;
@@ -1041,6 +1125,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     p.y = Math.min(F.height - P.radius, Math.max(P.radius, p.y));
 
     p.prevFire = input.fire;
+    p.prevFire2 = input.fire2;
   }
 
   // 静穏オーラ（裁定9）: 支援型の周囲の「落ち着いた」味方HPを静かに回復

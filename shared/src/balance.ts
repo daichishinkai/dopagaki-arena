@@ -2,6 +2,19 @@
  * 全バランス数値。SPEC.md 16章（初期バランス）と 6章（キャラ）が出典。
  * マジックナンバーはここ以外に書かない。
  */
+/**
+ * 世界スケール（裁定12）: キャラ・リーチ・範囲・弾速・移動速度を一律 2/3 に縮小。
+ * 時間とダメージは不変。フィールド寸法は据え置きなので、キャラ基準ではアリーナが1.5倍広くなる。
+ * ここを 1 に戻せば旧スケールに復帰する。
+ */
+export const WORLD_SCALE = 2 / 3;
+/** 長さ・速度（px, px/s）に適用 */
+const px = (n: number): number => n * WORLD_SCALE;
+/** 画面幅に対する割合に適用 */
+const ratio = (n: number): number => n * WORLD_SCALE;
+/** 横断秒（速度の逆数）に適用 */
+const cross = (n: number): number => n / WORLD_SCALE;
+
 export const BALANCE = {
   /** 論理フィールド寸法。「画面幅」の基準（距離減衰・高速移動の%はこの幅に対する割合） */
   field: { width: 1280, height: 720 },
@@ -16,11 +29,11 @@ export const BALANCE = {
     mourningSeconds: 10,
     /** CD半減＝CD消化2倍。ゲージ制は回復速度2倍で代替 */
     mourningRate: 2,
-    cover: { dashMax: 300, arriveGap: 10, shellSeconds: 3 },
+    cover: { dashMax: px(300), arriveGap: px(10), shellSeconds: 3 },
   },
 
   player: {
-    radius: 24,
+    radius: px(24),
     centerHitRatio: 0.3,
     centerHitMultiplier: 1.5,
     hp: 100,
@@ -32,9 +45,9 @@ export const BALANCE = {
 
   /** クラス別（SPEC 16章: 被ダメ1.3/0.85/1.0、横断1.2/2.0/1.5秒、シールド50/100/50） */
   classes: {
-    speed: { crossSeconds: 1.2, damageTaken: 1.3, shieldMax: 50, shieldTimeRegen: true },
-    heavy: { crossSeconds: 2.0, damageTaken: 0.85, shieldMax: 100, shieldTimeRegen: false },
-    support: { crossSeconds: 1.5, damageTaken: 1.0, shieldMax: 50, shieldTimeRegen: true },
+    speed: { crossSeconds: cross(1.2), damageTaken: 1.3, shieldMax: 50, shieldTimeRegen: true },
+    heavy: { crossSeconds: cross(2.0), damageTaken: 0.85, shieldMax: 100, shieldTimeRegen: false },
+    support: { crossSeconds: cross(1.5), damageTaken: 1.0, shieldMax: 50, shieldTimeRegen: true },
   },
 
   shield: {
@@ -56,7 +69,6 @@ export const BALANCE = {
     justStaggerSeconds: 0.25,
   },
 
-  weaponSwitchSeconds: 0.3,
 
   /** 重複CC半減（ガードブレイクは対象外） */
   cc: { stackMultiplier: 0.5 },
@@ -67,11 +79,11 @@ export const BALANCE = {
     damage: 6,
     magazine: 8,
     reloadSeconds: 1.2,
-    bulletSpeed: 1400,
-    bulletRadius: 5,
+    bulletSpeed: px(1400),
+    bulletRadius: px(5),
     falloff: [
-      { maxRatio: 0.12, multiplier: 1.0 },
-      { maxRatio: 0.35, multiplier: 0.75 },
+      { maxRatio: ratio(0.12), multiplier: 1.0 },
+      { maxRatio: ratio(0.35), multiplier: 0.75 },
       { maxRatio: Infinity, multiplier: 0.5 },
     ] as const,
     /** マーク: 全距離有効・最大3・4秒 */
@@ -82,11 +94,12 @@ export const BALANCE = {
     swingSeconds: 0.5, // 攻撃0〜0.4秒・硬直0.1秒
     activeSeconds: 0.4,
     hits: 4,
-    hitTimes: [0.05, 0.15, 0.25, 0.35] as const,
+    /** 裁定13: 棒が扇を掃く方式。2往復＝4パス。中心通過は 0.05/0.15/0.25/0.35（旧hitTimesと一致） */
+    sweep: { start: 0, passes: 4, passSeconds: 0.1 },
     damagePerHit: 3, // 計12
     lifestealPerHit: 2, // 背面180度限定
     lifestealCapPerSecond: 12,
-    reach: 74,
+    reach: px(74),
     arcRadians: 1.15, // 片側（約66°）
     /** 弾消し: 振り始め0.2秒後から0.15秒間・通常弾のみ・内部CD1.5秒 */
     erase: { start: 0.2, duration: 0.15, cooldown: 1.5 },
@@ -101,8 +114,8 @@ export const BALANCE = {
     gaugeMax: 100,
     gaugeRegenPerSecond: 12,
     sameSkillLockSeconds: 0.8,
-    dash: { cost: 35, distanceRatio: 0.12 }, // 画面幅12%
-    smoke: { cost: 30, radius: 90, seconds: 2 },
+    dash: { cost: 35, distanceRatio: ratio(0.12) }, // 画面幅12%
+    smoke: { cost: 30, radius: px(90), seconds: 2 },
     overload: { cooldown: 10, shots: 2, damageMultiplier: 3, expireSeconds: 4 },
   },
 
@@ -125,33 +138,36 @@ export const BALANCE = {
     /** 射撃停止後1秒スピン維持＋その後1秒で拡散リセット */
     spinKeepSeconds: 1,
     spreadResetSeconds: 1,
-    bulletSpeed: 1300,
-    bulletRadius: 4,
+    bulletSpeed: px(1300),
+    bulletRadius: px(4),
   },
   knife: {
     swingSeconds: 0.9, // 攻撃0.5秒・硬直0.4秒
-    hitTime: 0.3,
+    /** 1パス。中心通過0.3秒（旧hitTimeと一致） */
+    sweep: { start: 0.15, passes: 1, passSeconds: 0.3 },
     damage: 20,
-    reach: 64,
+    reach: px(64),
     arcRadians: 0.8,
   },
   heavySkills: {
     sameSkillLockSeconds: 0.8,
-    slam: { cost: 60, radius: 150, staggerSeconds: 0.5 },
-    wall: { cost: 70, lengthPlayers: 2.5, hp: 80, seconds: 2.5, thickness: 12, placeDistance: 70 },
-    cover: { cost: 50, fallbackDashDistance: 110, fallbackShellSeconds: 1, shellDamageCut: 0.6 },
+    slam: { cost: 60, radius: px(150), staggerSeconds: 0.5 },
+    wall: { cost: 70, lengthPlayers: 2.5, hp: 80, seconds: 2.5, thickness: px(12), placeDistance: px(70) },
+    cover: { cost: 50, fallbackDashDistance: px(110), fallbackShellSeconds: 1, shellDamageCut: 0.6 },
   },
 
   // ---------------- 支援型 ----------------
   sniper: {
+    /** 裁定10: 左クリックを離した時の溜め時間で3分岐。~tap=ヒール / ~chargeMin=不発（フェイント） / 以上=狙撃 */
+    tapSeconds: 0.15,
     chargeMin: 0.3,
     chargeMax: 1.5,
     holdMaxSeconds: 2.5, // 超過で自動発射
     damageMin: 12,
     damageMax: 32,
-    radiusMax: 8, // 弾幅100%
-    radiusMin: 3.2, // 40%
-    speedBase: 1100,
+    radiusMax: px(8), // 弾幅100%
+    radiusMin: px(3.2), // 40%
+    speedBase: px(1100),
     speedMaxMultiplier: 1.2,
     moveMultiplierWhileCharging: 0.85,
     wallReflects: 1,
@@ -159,33 +175,34 @@ export const BALANCE = {
   healShot: {
     heal: 12,
     intervalSeconds: 0.9,
-    bulletSpeed: 520,
-    bulletRadius: 12,
+    bulletSpeed: px(520),
+    bulletRadius: px(12),
     homingRadPerSecond: 3.5,
     wallReflects: 1,
   },
   jab: {
     swingSeconds: 0.5, // 1発サイクル0.5秒＝DPS16
-    hitTime: 0.08, // 発生0.08秒
+    /** 1パス。中心通過0.08秒（旧hitTimeと一致） */
+    sweep: { start: 0.03, passes: 1, passSeconds: 0.1 },
     damage: 8,
-    reach: 48, // 全近接中最短
-    arcRadians: 0.7,
+    reach: px(48), // 全近接中最短
+    arcRadians: 1.0, // 裁定13: 範囲を見やすくするため厚く（旧0.7）
     hpStealPerHit: 3,
     hpStealCapPerSecond: 8,
   },
   /** 静穏オーラ（裁定9）: 半径2キャラ分・毎秒HP2・最終被弾から4秒経過した味方（自分含む）のみ・シールド対象外・非スタック */
-  calmAura: { radius: 96, healPerSecond: 2, calmSeconds: 4 },
+  calmAura: { radius: px(96), healPerSecond: 2, calmSeconds: 4 },
 
   supportSkills: {
     bell: { cooldown: 14, invulnSeconds: 0.75 },
-    areaHeal: { cooldown: 10, radius: 170, heal: 20 },
-    stun: { cooldown: 12, stunSeconds: 0.5, cdDelaySeconds: 2, bulletSpeed: 1000, bulletRadius: 7 },
+    areaHeal: { cooldown: 10, radius: px(170), heal: 20 },
+    stun: { cooldown: 12, stunSeconds: 0.5, cdDelaySeconds: 2, bulletSpeed: px(1000), bulletRadius: px(7) },
   },
 
   /** 層2合体技（SPEC 7.2）: 0.5秒以内の相互発動＋距離が画面幅25%以内→0.3秒の構え→LINKボーナス */
   link: {
     windowSeconds: 0.5,
-    maxDistanceRatio: 0.25,
+    maxDistanceRatio: ratio(0.25),
     stanceSeconds: 0.3,
     breach: { markBoostSeconds: 2, markBoostMultiplier: 2 },
     echoWall: { extraSeconds: 1.5, boostMultiplier: 1.25 },
@@ -215,4 +232,4 @@ export function shieldMaxOf(cls: CharClass): number {
 }
 
 /** 後方互換（標準=支援型相当の横断1.5秒） */
-export const MOVE_SPEED = BALANCE.field.width / 1.5;
+export const MOVE_SPEED = BALANCE.field.width / BALANCE.classes.support.crossSeconds;

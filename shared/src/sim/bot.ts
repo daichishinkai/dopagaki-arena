@@ -30,7 +30,7 @@ const RANGE: Record<CharClass, number[]> = {
   // 武器スロットごとの得意距離
   speed: [55, 320],
   heavy: [340, 55],
-  support: [520, 260, 45],
+  support: [520, 45], // 裁定10: 0=狙撃/ヒール（左）, 1=ジャブ（右）
 };
 
 function losBlocked(state: SimState, x1: number, y1: number, x2: number, y2: number): boolean {
@@ -92,14 +92,13 @@ function think(state: SimState, me: PlayerState, mem: BotMemory, level: BotLevel
   // 武器選択（Lv2+）
   if (level >= 2) {
     if (mem.healAllyId) {
-      mem.desiredWeapon = 1; // 支援: 回復弾
+      mem.desiredWeapon = 0; // 支援: ヒールは左クリックの単クリック
     } else {
       const d = dist(me, target);
       const ranges = RANGE[me.cls];
       let best = 0;
       let bestScore = Infinity;
       ranges.forEach((r, i) => {
-        if (me.cls === "support" && i === 1) return; // 敵狙いで回復弾は選ばない
         const score = Math.abs(d - r);
         if (score < bestScore) { bestScore = score; best = i; }
       });
@@ -194,18 +193,29 @@ export function botInput(state: SimState, botId: PlayerId, level: BotLevel, mem:
     my /= len;
   }
 
-  // 武器切替（エッジ）
-  const numWeapons = WEAPONS[me.cls].length;
-  const switchWeapon = level >= 2 && me.weapon !== (mem.desiredWeapon % numWeapons) && me.switchCd <= 0 && me.swingT <= 0;
-
-  // 射撃: スナイパーは溜め→適度な溜めでリリース（fire=false）
-  let fire = mem.fire && !mem.retreat;
-  if (mem.healAllyId && me.weapon === 1) fire = true;
-  if (me.cls === "support" && me.weapon === 0 && me.chargeT > 0) {
-    const targetCharge = level >= 2 ? 1.1 : 0.6;
-    if (me.chargeT >= targetCharge) fire = false; // リリースで発射
+  // 武器の使い分け（裁定10: 左=主武器 / 右=副武器。切替操作は廃止）
+  const shoot = mem.fire && !mem.retreat;
+  // Lv1は武器を選ばないので、遠距離側スロット（射撃武器）で固定する
+  const defaultSlot = ranges.indexOf(Math.max(...ranges));
+  const slot = level >= 2 ? mem.desiredWeapon % WEAPONS[me.cls].length : defaultSlot;
+  let fire = false;
+  let fire2 = false;
+  if (me.cls === "support") {
+    if (mem.healAllyId) {
+      // ヒールは単クリック。1tickだけ押して離すことで tapSeconds 未満に収める
+      fire = me.chargeT === 0;
+    } else if (slot === 1) {
+      fire2 = shoot; // ジャブ
+    } else if (shoot || me.chargeT > 0) {
+      const targetCharge = level >= 2 ? 1.1 : 0.6;
+      fire = me.chargeT < targetCharge; // 溜め切ったら離して発射
+    }
+  } else if (slot === 1) {
+    fire2 = shoot;
+  } else {
+    fire = shoot;
   }
 
   const sk = skills(state, me, mem, level, rng);
-  return { mx, my, aim: mem.aim, fire, guard: false, switchWeapon, ...sk };
+  return { mx, my, aim: mem.aim, fire, fire2, guard: false, ...sk };
 }
