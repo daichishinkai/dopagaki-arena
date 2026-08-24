@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { BALANCE, moveSpeedOf } from "../src/balance";
-import { applyCC, createMatch, step, WEAPONS } from "../src/sim/step";
+import { applyCC, createMatch as createMatchRaw, step, WEAPONS } from "../src/sim/step";
 import type { PlayerInput, SimEvent, SimState } from "../src/sim/types";
 import { NULL_INPUT } from "../src/sim/types";
+
+/** テストは開始カウントダウン（裁定16）をスキップして本編だけを検証する */
+const createMatch: typeof createMatchRaw = (...args) => {
+  const s = createMatchRaw(...args);
+  s.countdown = 0;
+  return s;
+};
+
 
 const DT = 1 / BALANCE.tickRate;
 
@@ -46,8 +54,9 @@ function tapFire(state: SimState, seconds: number, id = "a") {
 describe("クラス基礎（SPEC 16章）", () => {
   it("横断速度: 速1.2秒 / 重2.0秒 / 支1.5秒", () => {
     // 世界スケール（裁定12）で一律に遅くなるが、クラス間の比は不変
-    expect(moveSpeedOf("speed") / moveSpeedOf("support")).toBeCloseTo(1.5 / 1.2);
-    expect(moveSpeedOf("heavy") / moveSpeedOf("support")).toBeCloseTo(1.5 / 2.0);
+    // 裁定24: タンクと支援型は同速、スピード型だけ少し速い
+    expect(moveSpeedOf("heavy")).toBeCloseTo(moveSpeedOf("support"));
+    expect(moveSpeedOf("speed")).toBeGreaterThan(moveSpeedOf("support"));
     expect(moveSpeedOf("support")).toBeCloseTo(1280 / BALANCE.classes.support.crossSeconds);
   });
   it("武器構成", () => {
@@ -68,10 +77,11 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
   it("セイバー1振り: 4ヒット・計12ダメ（対支援=倍率1.0）", () => {
     const s = duel("speed", "support", 50);
     const r = run(s, { a: fire }, 0.5);
+    // 裁定25: 刀は重厚な一振り（単発）
     const hits = r.events.filter((e) => e.type === "hit" && e.melee);
-    expect(hits).toHaveLength(4);
+    expect(hits).toHaveLength(1);
     const total = hits.reduce((sum, e) => sum + (e.type === "hit" ? e.damage : 0), 0);
-    expect(total).toBeCloseTo(12);
+    expect(total).toBeCloseTo(BALANCE.saber.damagePerHit);
   });
   it("マーク: ピストルヒットで付与（最大3・4秒）→ セイバー初撃で全消費 +4ダメ/枚・逃げゲージ+8/枚", () => {
     const s = duel("speed", "support", 200);
@@ -84,7 +94,7 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
     s2.players[0]!.escapeGauge = 40;
     const r2 = run(s2, { a: fire }, 0.12); // 初撃(0.05s)のみ
     const hit = r2.events.find((e) => e.type === "hit" && e.melee);
-    expect(hit && hit.type === "hit" && hit.damage).toBeCloseTo(3 + 4 * 3); // 3+12=15
+    expect(hit && hit.type === "hit" && hit.damage).toBeCloseTo(BALANCE.saber.damagePerHit + BALANCE.saber.markBonusDamage * 3);
     expect(r2.state.players[1]!.marks).toBeNull();
     expect(r2.state.players[0]!.escapeGauge).toBeGreaterThanOrEqual(40 + 24); // +8×3（自然回復分は誤差側）
   });
@@ -139,7 +149,8 @@ describe("重量型: HMG・ナイフ・統合ゲージ（SPEC 6.2）", () => {
     expect(p.unifiedGauge).toBeCloseTo(100 + 10 * (1.4 + DT) + hmgHits * 2, 0);
     // シールドは与ダメ50%（中心ヒットが混ざるため実与ダメから計算）
     const totalDmg = r.events.filter((e) => e.type === "hit" && !e.melee).reduce((sum, e) => sum + (e.type === "hit" ? e.damage : 0), 0);
-    expect(p.shield).toBeCloseTo(totalDmg * 0.5, 1);
+    // 裁定20: 重量型のシールド回収率は100%（HMGダメージ半減の副作用を打ち消す）
+    expect(p.shield).toBeCloseTo(totalDmg * BALANCE.shield.heavyLifestealRatio, 1);
   });
   it("ナイフ: 20ダメ・命中でゲージ+20", () => {
     const s = duel("heavy", "support", BALANCE.knife.reach * 0.6);
@@ -166,8 +177,12 @@ describe("重量型: HMG・ナイフ・統合ゲージ（SPEC 6.2）", () => {
     const s = duel("heavy", "support", 100);
     // 敵弾を範囲内に置く
     s.bullets.push({ id: 999, kind: "pistol", owner: "b", ownerTeam: 1, x: s.players[0]!.x + 50, y: s.players[0]!.y, vx: 0, vy: 0, ox: 0, oy: 0, damage: 6, radius: 5, normal: true, reflectsLeft: 0, boost: 1, mist: false });
-    const r = run(s, { a: { ...NULL_INPUT, skill1: true } }, DT * 2);
-    expect(r.state.players[0]!.unifiedGauge).toBeLessThanOrEqual(200 - 60 + 1);
+    // 裁定21: 押した瞬間にゲージ消費、windup(0.35秒)後に発動
+    const r0 = run(s, { a: { ...NULL_INPUT, skill1: true } }, DT * 2);
+    expect(r0.state.players[0]!.unifiedGauge).toBeLessThanOrEqual(200 - 60 + 1);
+    expect(r0.state.players[0]!.slamT).toBeGreaterThan(0);
+    expect(r0.state.players[1]!.cc).toBe(0); // 溜め中はまだ効果なし
+    const r = run(r0.state, {}, BALANCE.heavySkills.slam.windupSeconds + DT * 2);
     expect(r.state.players[1]!.cc).toBeGreaterThan(0.4);
     expect(r.state.bullets.filter((b) => b.id === 999)).toHaveLength(0);
   });
@@ -185,6 +200,36 @@ describe("重量型: HMG・ナイフ・統合ゲージ（SPEC 6.2）", () => {
     expect(r3.state.walls[0]!.hp).toBe(80);
     const r4 = run(r3.state, {}, 2.5);
     expect(r4.state.walls).toHaveLength(0); // 2.5秒で消滅
+  });
+  it("ビルドウォール（裁定21）: 長押しで構え→離した位置に設置。最大5キャラ分でクランプ", () => {
+    const s = duel("heavy", "support", 400);
+    const a = s.players[0]!;
+    a.x = 300; a.y = 360; a.aim = 0;
+    a.unifiedGauge = 200;
+    const hold = { ...NULL_INPUT, aim: 0, aimDist: 9999, skill2: true, skill2Held: true };
+    const r1 = run(s, { a: hold }, DT * 2);
+    expect(r1.state.players[0]!.wallAiming).toBe(true);
+    expect(r1.state.walls).toHaveLength(0); // 構え中はまだ立たない
+    expect(r1.state.players[0]!.unifiedGauge).toBeLessThanOrEqual(200 - 70 + 1); // ゲージは構え開始で消費
+    // 離すと設置。距離は5キャラ分でクランプされる
+    const r2 = run(r1.state, { a: { ...NULL_INPUT, aim: 0, aimDist: 9999 } }, DT * 2);
+    expect(r2.state.walls).toHaveLength(1);
+    const w = r2.state.walls[0]!;
+    const cx = (w.x1 + w.x2) / 2;
+    const maxD = BALANCE.heavySkills.wall.placeMaxPlayers * BALANCE.player.radius * 2;
+    expect(cx - 300).toBeCloseTo(maxD, 0);
+  });
+  it("ビルドウォール: 右クリックでキャンセル。ゲージは返らない（裁定21）", () => {
+    const s = duel("heavy", "support", 400);
+    s.players[0]!.unifiedGauge = 200;
+    const hold = { ...NULL_INPUT, aim: 0, aimDist: 50, skill2: true, skill2Held: true };
+    const r1 = run(s, { a: hold }, DT * 2);
+    expect(r1.state.players[0]!.wallAiming).toBe(true);
+    const gauge = r1.state.players[0]!.unifiedGauge;
+    const r2 = run(r1.state, { a: { ...NULL_INPUT, aim: 0, fire2: true, skill2Held: true } }, DT * 2);
+    expect(r2.state.players[0]!.wallAiming).toBe(false);
+    expect(r2.state.walls).toHaveLength(0);
+    expect(r2.state.players[0]!.unifiedGauge).toBeLessThanOrEqual(gauge + 1); // 返却なし
   });
   it("ブレイク硬直は半減（0.3秒）", () => {
     const s = duel("speed", "heavy", 100);

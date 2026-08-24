@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { BALANCE, moveSpeedOf } from "../src/balance";
-import { createMatch, step } from "../src/sim/step";
+import { createMatch as createMatchRaw, step } from "../src/sim/step";
 import type { PlayerInput, SimEvent, SimState } from "../src/sim/types";
 import { NULL_INPUT } from "../src/sim/types";
+
+/** テストは開始カウントダウン（裁定16）をスキップして本編だけを検証する */
+const createMatch: typeof createMatchRaw = (...args) => {
+  const s = createMatchRaw(...args);
+  s.countdown = 0;
+  return s;
+};
+
 
 const DT = 1 / BALANCE.tickRate;
 
@@ -98,7 +106,8 @@ describe("スピード型の切り返し硬直（SPEC 6.1）", () => {
     const x2 = r2.state.players[0]!.x;
     const r3 = run(r2.state, { a: { ...NULL_INPUT, mx: -1 } }, 0.1);
     expect(r3.state.players[0]!.turnLock).toBe(0);
-    expect(x2 - r3.state.players[0]!.x).toBeGreaterThan(70); // 免除で即座に戻れる
+    // 免除で即座に戻れる（移動速度に追従させる）
+    expect(x2 - r3.state.players[0]!.x).toBeGreaterThan(moveSpeedOf("speed") * 0.1 * 0.9);
   });
 });
 
@@ -117,10 +126,10 @@ describe("最大連携ダメージ（SPEC 7.2）", () => {
     const sp = s.players.find((p) => p.id === "sp")!;
     const e1 = s.players.find((p) => p.id === "e1")!;
     hv.x = 400; hv.y = 300; hv.aim = Math.PI / 2; // 壁は下向きに置いて弾道を塞がない
-    sp.x = 480; sp.y = 300;
+    sp.x = 420; sp.y = 300;
     e1.x = 700; e1.y = 300;
     // ブリーチ成立（発動後は移動入力を止めて位置を固定）
-    const r0 = run(s, { hv: { ...NULL_INPUT, aim: Math.PI / 2, skill2: true }, sp: { ...NULL_INPUT, mx: 1, skill1: true } }, DT * 2);
+    const r0 = run(s, { hv: { ...NULL_INPUT, aim: Math.PI / 2, aimDist: 60, skill2: true }, sp: { ...NULL_INPUT, mx: 1, skill1: true } }, DT * 2);
     const r1 = run(r0.state, {}, 0.35);
     expect(r1.state.linkWindows.length).toBe(1);
     // 参加者spが撃つ → maxLinkDamage に載る
@@ -134,7 +143,7 @@ describe("最大連携ダメージ（SPEC 7.2）", () => {
   });
 });
 
-describe("層2合体技（SPEC 7.2）", () => {
+describe("スキルリンク（SPEC 7.2）", () => {
   function teamPair(): SimState {
     return createMatch(
       [
@@ -151,9 +160,9 @@ describe("層2合体技（SPEC 7.2）", () => {
     const hv = s.players.find((p) => p.id === "hv")!;
     const sp = s.players.find((p) => p.id === "sp")!;
     hv.x = 400; hv.y = 360; hv.aim = 0;
-    sp.x = 480; sp.y = 360;
+    sp.x = 420; sp.y = 360;
     sp.escapeGauge = 100;
-    const r1 = run(s, { hv: { ...NULL_INPUT, aim: 0, skill2: true }, sp: { ...NULL_INPUT, mx: 1, skill1: true } }, DT * 3);
+    const r1 = run(s, { hv: { ...NULL_INPUT, aim: 0, aimDist: 60, skill2: true }, sp: { ...NULL_INPUT, mx: 1, skill1: true } }, DT * 3);
     expect(r1.state.pendingLinks.length + r1.events.filter((e) => e.type === "link").length).toBeGreaterThan(0);
     const r2 = run(r1.state, {}, 0.35);
     const linkEv = [...r1.events, ...r2.events].find((e) => e.type === "link");
@@ -175,26 +184,32 @@ describe("層2合体技（SPEC 7.2）", () => {
     const sp = s.players.find((p) => p.id === "sp")!;
     hv.x = 200; hv.y = 360; hv.aim = 0;
     sp.x = 200 + BALANCE.field.width * 0.3; sp.y = 360;
-    const r = run(s, { hv: { ...NULL_INPUT, aim: 0, skill2: true }, sp: { ...NULL_INPUT, mx: 1, skill1: true } }, 0.5);
+    const r = run(s, { hv: { ...NULL_INPUT, aim: 0, aimDist: 60, skill2: true }, sp: { ...NULL_INPUT, mx: 1, skill1: true } }, 0.5);
     expect(r.state.linkCount).toBe(0);
   });
-  it("エコーウォール: 壁+範囲回復→壁持続+1.5秒＆反射味方弾+25%", () => {
-    const s = teamPair();
+  it("スラム×スタン（裁定28）: のけぞり中にスタン弾がスラム範囲へ着弾→範囲の敵を0.5秒スタン", () => {
+    const s = createMatch(
+      [
+        { id: "hv", name: "HV", cls: "heavy", team: 0 },
+        { id: "su", name: "SU", cls: "support", team: 0 },
+        { id: "e1", name: "E1", cls: "speed", team: 1 },
+      ],
+      "teams",
+    );
     const hv = s.players.find((p) => p.id === "hv")!;
     const su = s.players.find((p) => p.id === "su")!;
-    hv.x = 400; hv.y = 360; hv.aim = 0; // 壁は470に立つ
-    su.x = 300; su.y = 360; // 壁の手前から撃って反射させる
-    const r1 = run(s, { hv: { ...NULL_INPUT, aim: 0, skill2: true }, su: { ...NULL_INPUT, skill2: true } }, 0.35);
-    const wall = r1.state.walls[0]!;
-    expect(wall.echo).toBe(true);
-    expect(wall.expire - r1.state.t).toBeGreaterThan(BALANCE.heavySkills.wall.seconds - 0.35 + 1.4);
-    // 味方スナイパー弾を壁に反射させると boost 1.25
-    const r2 = run(r1.state, { su: { ...NULL_INPUT, aim: 0, fire: true } }, 0.5);
-    const r3 = run(r2.state, { su: { ...NULL_INPUT, aim: 0 } }, 0.45); // 弾速も世界スケールで遅くなるため長めに回す
-    const boosted = r3.state.bullets.find((b) => b.kind === "sniper");
-    expect(boosted?.boost).toBeCloseTo(1.25);
+    const e1 = s.players.find((p) => p.id === "e1")!;
+    hv.x = 600; hv.y = 360;
+    su.x = 300; su.y = 360; su.aim = 0;
+    e1.x = 640; e1.y = 360; // スラム範囲内
+    const r0 = run(s, { hv: { ...NULL_INPUT, skill1: true }, su: { ...NULL_INPUT, aim: 0, skill3: true } }, DT * 2);
+    const r1 = run(r0.state, {}, 0.8); // 溜め0.35秒→発動→スタン弾が到達
+    const ev = [...r0.events, ...r1.events].find((e) => e.type === "link");
+    expect(ev && ev.type === "link" && ev.pair).toBe("slamStun");
+    expect(r1.state.players.find((p) => p.id === "e1")!.cc).toBeGreaterThan(0);
   });
-  it("ミストシグナル: スモーク+スタン弾→スモーク内の全敵に0.4秒スタン（弾道外の敵にも入る）", () => {
+
+  it("ライトニング（旧ミストシグナル）: スモーク+スタン弾→スモーク内の全敵に0.4秒スタン（弾道外の敵にも入る）", () => {
     const s = teamPair();
     const sp = s.players.find((p) => p.id === "sp")!;
     const su = s.players.find((p) => p.id === "su")!;
@@ -209,7 +224,7 @@ describe("層2合体技（SPEC 7.2）", () => {
     const linkEv = [...r1.events, ...r2.events].find((e) => e.type === "link");
     const r3 = run(r2.state, {}, 0.6);
     const linkEv2 = linkEv ?? r3.events.find((e) => e.type === "link");
-    expect(linkEv2 && linkEv2.type === "link" && linkEv2.pair).toBe("mistSignal");
+    expect(linkEv2 && linkEv2.type === "link" && linkEv2.pair).toBe("lightning");
     const enemy = r3.state.players.find((p) => p.id === "e1")!;
     expect(enemy.cc).toBeGreaterThan(0.05); // 弾道外でも炸裂スタンを受けた
   });

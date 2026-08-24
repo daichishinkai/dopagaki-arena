@@ -9,8 +9,16 @@ export interface PlayerInput {
   aim: number;
   /** 左クリック＝主武器（裁定10） */
   fire: boolean;
-  /** 右クリック＝副武器（裁定10） */
+  /** 右クリック＝副武器（裁定10）。ビルドウォール構え中はキャンセル入力になる */
   fire2: boolean;
+  /** カーソルまでの距離（ビルドウォールの設置位置に使う） */
+  aimDist: number;
+  /** スキル1を押し続けているか（バレットプルーフの構え判定・裁定26） */
+  skill1Held: boolean;
+  /** スキル2を押し続けているか（ビルドウォール／ポーションの構え判定） */
+  skill2Held: boolean;
+  /** 構え中にカーソルが選んでいる味方（バレットプルーフの追尾先） */
+  aimAllyId: PlayerId | null;
   guard: boolean;
   skill1: boolean;
   skill2: boolean;
@@ -23,6 +31,10 @@ export const NULL_INPUT: PlayerInput = {
   aim: 0,
   fire: false,
   fire2: false,
+  aimDist: 0,
+  skill1Held: false,
+  skill2Held: false,
+  aimAllyId: null,
   guard: false,
   skill1: false,
   skill2: false,
@@ -75,10 +87,23 @@ export interface PlayerState {
   swingHitsDone: number;
   /** 掃き判定: 直前tickの棒の角度（p.aim基準の相対角）。非スイング時は null */
   swingAngle: number | null;
-  /** このスイングで既に1回以上当てた相手（マーク回収の初撃判定用） */
+  /** 現在のパスで既に当てた相手（1パス1ヒットに制限・裁定23） */
   swingHitIds: PlayerId[];
+  /** 現在のパス番号（切り替わったら swingHitIds を空にする） */
+  swingPass: number;
   /** 近接を出したのが副武器（右クリック）か。表示と武器判定に使う */
   swingSub: boolean;
+  /** ビルドウォールを構えている（裁定21）。ゲージは構え開始時に消費済み */
+  wallAiming: boolean;
+  /** バレットプルーフを構えている（裁定26） */
+  bellAiming: boolean;
+  bellHoldT: number;
+  /** ポーションを構えている（裁定26） */
+  potionAiming: boolean;
+  /** スタン弾の通常ヒットで得た「次の狙撃が即最大溜め」の有効期限（裁定27） */
+  snipeBoostUntil: number;
+  /** グラウンドスラムの溜め残り秒（裁定21）。0で発動 */
+  slamT: number;
   eraseCd: number;
   eraseUsedThisSwing: boolean;
 
@@ -121,7 +146,7 @@ export interface PlayerState {
   deaths: number;
 }
 
-export type BulletKind = "pistol" | "hmg" | "sniper" | "heal" | "stun";
+export type BulletKind = "pistol" | "hmg" | "sniper" | "heal" | "stun" | "bell" | "potion";
 
 export interface BulletState {
   /** エコーウォール反射による強化倍率（ダメ/回復） */
@@ -130,6 +155,11 @@ export interface BulletState {
   mist: boolean;
   id: number;
   kind: BulletKind;
+  /** 投擲物の着弾地点（ポーション）。到達で炸裂する */
+  tx?: number;
+  ty?: number;
+  /** 追尾対象（バレットプルーフ） */
+  homingId?: PlayerId;
   owner: PlayerId;
   ownerTeam: number;
   x: number;
@@ -177,12 +207,12 @@ export type MatchPhase = "playing" | "ended";
 
 export type MatchMode = "ffa" | "teams";
 
-export type LinkPair = "breach" | "echoWall" | "mistSignal";
+export type LinkPair = "breach" | "lightning" | "slamStun" | "slamPotion";
 
 export interface SkillRecord {
   owner: PlayerId;
   team: number;
-  kind: "wall" | "dash" | "areaHeal" | "smoke" | "stun";
+  kind: "wall" | "dash" | "areaHeal" | "smoke" | "stun" | "slam";
   t: number;
   x: number;
   y: number;
@@ -211,7 +241,19 @@ export interface MatchResult {
   reason: "lives" | "timeout-lives" | "timeout-hp" | "draw";
 }
 
+/** グラウンドスラムの残り効果域（裁定28: のけぞりが切れるまでスキルリンクを受け付ける） */
+export interface SlamZone {
+  owner: PlayerId;
+  team: number;
+  x: number;
+  y: number;
+  until: number;
+}
+
 export interface SimState {
+  /** 開始カウントダウンの残り秒（裁定16）。>0 の間は全処理を止める */
+  countdown: number;
+  slamZones: SlamZone[];
   t: number;
   tick: number;
   phase: MatchPhase;
@@ -234,6 +276,14 @@ export interface SimState {
 }
 
 export type SimEvent =
+  /** 開始カウントダウンの数字が変わった瞬間（3→2→1→0） */
+  | { type: "countdown"; left: number }
+  /** グラウンドスラムの溜め開始（裁定21） */
+  | { type: "slamWindup"; owner: PlayerId }
+  /** ビルドウォールの構え開始／キャンセル（裁定21） */
+  | { type: "wallAim"; owner: PlayerId; cancelled: boolean }
+  /** スキルリンク: スラム範囲に感電／回復が広がる演出用（裁定28） */
+  | { type: "slamLink"; pair: "slamStun" | "slamPotion"; x: number; y: number; ox: number; oy: number; radius: number }
   | { type: "shoot"; owner: PlayerId; x: number; y: number; kind: BulletKind }
   | { type: "swing"; owner: PlayerId }
   | { type: "hit"; target: PlayerId; attacker: PlayerId; x: number; y: number; damage: number; center: boolean; guarded: boolean; melee: boolean }
@@ -242,6 +292,8 @@ export type SimEvent =
   | { type: "guardBreak"; target: PlayerId }
   | { type: "justGuard"; target: PlayerId; attacker: PlayerId }
   | { type: "skill"; owner: PlayerId; skill: number }
+  /** ソニックの移動（裁定24）: 残像トレイル演出用の始点と終点 */
+  | { type: "sonic"; owner: PlayerId; fromX: number; fromY: number; x: number; y: number }
   | { type: "wallBreak"; id: number }
   | { type: "kill"; target: PlayerId; attacker: PlayerId }
   | { type: "respawn"; target: PlayerId }

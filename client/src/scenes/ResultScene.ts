@@ -49,7 +49,8 @@ export class ResultScene extends Phaser.Scene {
     }
 
     const isHost = session.mode === "solo" || session.net.isHost;
-    const rematch = button(this, W / 2 - 180, H * 0.78, isHost ? "再戦" : "ホストの再戦待ち…", () => {
+    const contLabel = session.mode === "solo" ? "続ける" : isHost ? "再戦" : "ホストの再戦待ち…";
+    const rematch = button(this, W / 2 - 180, H * 0.78, contLabel, () => {
       if (session.mode === "solo") {
         this.scene.start("game");
         return;
@@ -68,7 +69,7 @@ export class ResultScene extends Phaser.Scene {
       this.scene.start("game");
     });
     rematch.setEnabled(isHost);
-    button(this, W / 2 + 180, H * 0.78, "タイトルへ", () => {
+    button(this, W / 2 + 180, H * 0.78, "ホームに戻る", () => {
       if (session.mode === "online") session.net.disconnect();
       this.scene.start("title");
     });

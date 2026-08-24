@@ -2,6 +2,7 @@ import { BALANCE, moveSpeedOf, shieldMaxOf, type CharClass } from "../balance";
 import type {
   BulletKind,
   BulletState,
+  LinkPair,
   MatchResult,
   PlayerId,
   PlayerInput,
@@ -88,7 +89,14 @@ export function createPlayer(id: PlayerId, name: string, cls: CharClass, slot: n
     swingHitsDone: 0,
     swingAngle: null,
     swingHitIds: [],
+    swingPass: -1,
     swingSub: false,
+    wallAiming: false,
+    slamT: 0,
+    bellAiming: false,
+    bellHoldT: 0,
+    potionAiming: false,
+    snipeBoostUntil: -Infinity,
     eraseCd: 0,
     eraseUsedThisSwing: false,
     chargeT: 0,
@@ -144,6 +152,7 @@ export function createMatch(
     for (const p of ps) teamLives[p.team] = (sizes[p.team] ?? 2) >= 3 ? BALANCE.teams.sharedLives3 : BALANCE.teams.sharedLives;
   }
   return {
+    countdown: BALANCE.countdownSeconds,
     t: 0,
     tick: 0,
     phase: "playing",
@@ -154,6 +163,7 @@ export function createMatch(
     bullets: [],
     walls: [],
     smokes: [],
+    slamZones: [],
     nextId: 1,
     recentSkills: [],
     pendingLinks: [],
@@ -394,8 +404,9 @@ function useWeapon(
   } else if (w === "heal") {
     if (down) fireHeal(state, p, events);
   } else {
-    // 近接（saber / knife / jab）
-    if (down && p.swingT <= 0) startSwing(p, sub, events);
+    // 近接（saber / knife / jab）。刀は押しっぱなしで連続しない（裁定25）
+    const edgeOnly = w === "saber";
+    if (down && (!edgeOnly || !prevDown) && p.swingT <= 0) startSwing(p, sub, events);
   }
 }
 
@@ -409,6 +420,15 @@ function releaseSupportPrimary(state: SimState, p: PlayerState, events: SimEvent
   if (charge < S.tapSeconds) {
     p.chargeT = 0;
     p.holdT = 0;
+    // 裁定27: スタン弾を当てた直後の単押しは、即最大溜めの狙撃になる（威力は通常の最大溜めの60%）
+    if (state.t <= p.snipeBoostUntil) {
+      p.snipeBoostUntil = -Infinity;
+      const dmg = S.damageMax * S.boostDamageRatio;
+      p.invuln = 0;
+      spawnBullet(state, p, "sniper", p.aim, S.speedBase * S.speedMaxMultiplier, dmg, S.radiusMin, false, S.wallReflects);
+      events.push({ type: "shoot", owner: p.id, x: p.x, y: p.y, kind: "sniper" });
+      return;
+    }
     fireHeal(state, p, events);
     return;
   }
@@ -434,6 +454,14 @@ function meleeSpec(cls: CharClass): MeleeSpec {
  * 経過時間における棒の角度（p.aim からの相対角）。掃き区間外は null。
  * パスごとに向きが反転するので、passes=4 なら「左端→右端→左端→右端→左端」の2往復になる。
  */
+/** 経過時間におけるパス番号（掃き区間外は null） */
+export function stickPassAt(spec: MeleeSpec, elapsed: number): number | null {
+  const { start, passes, passSeconds } = spec.sweep;
+  const rel = elapsed - start;
+  if (rel < 0 || rel > passes * passSeconds) return null;
+  return Math.min(passes - 1, Math.floor(rel / passSeconds));
+}
+
 export function stickAngleAt(spec: MeleeSpec, elapsed: number): number | null {
   const { start, passes, passSeconds } = spec.sweep;
   const rel = elapsed - start;
@@ -444,21 +472,34 @@ export function stickAngleAt(spec: MeleeSpec, elapsed: number): number | null {
   return idx % 2 === 0 ? -spec.arc + 2 * spec.arc * u : spec.arc - 2 * spec.arc * u;
 }
 
-/** 相手の相対角（p.aim基準・-PI..PI）。射程外なら null */
-function relAngle(p: PlayerState, target: PlayerState, reach: number): number | null {
-  const dx = target.x - p.x;
-  const dy = target.y - p.y;
-  if (Math.hypot(dx, dy) > reach + P.radius) return null;
-  let da = Math.atan2(dy, dx) - p.aim;
-  while (da > Math.PI) da -= Math.PI * 2;
-  while (da < -Math.PI) da += Math.PI * 2;
-  return da;
+/**
+ * 相手の相対角（p.aim基準・-PI..PI）と、その見かけの角度半幅。射程外なら null。
+ * 裁定23: 中心点だけで判定すると、体が扇に重なっていても中心が外なら当たらず
+ * 「先端に判定がない」ように感じる。相手の半径ぶんの角度幅を許容に含める。
+ */
+/** -PI..PI に畳む。非有限値でも無限ループしないようにガードする */
+function normalizeAngle(a: number): number {
+  if (!Number.isFinite(a)) return 0;
+  let v = (a + Math.PI) % (Math.PI * 2);
+  if (v < 0) v += Math.PI * 2;
+  return v - Math.PI;
 }
 
-/** 棒が prevA→curA と動く間に相手の角度を横切ったか（裁定13） */
-function stickCrossed(da: number, prevA: number, curA: number): boolean {
-  const lo = Math.min(prevA, curA);
-  const hi = Math.max(prevA, curA);
+function relAngle(p: PlayerState, target: PlayerState, reach: number): { da: number; half: number } | null {
+  const dx = target.x - p.x;
+  const dy = target.y - p.y;
+  const d = Math.hypot(dx, dy);
+  if (d > reach + P.radius) return null;
+  const da = normalizeAngle(Math.atan2(dy, dx) - p.aim);
+  // 距離dから見た半径P.radiusの見込み角。密着時は広く、先端では狭くなる
+  const half = d <= P.radius ? Math.PI : Math.asin(Math.min(1, P.radius / d));
+  return { da, half };
+}
+
+/** 棒が prevA→curA と動く間に相手の体（角度幅half）を横切ったか（裁定13・23） */
+function stickCrossed(da: number, half: number, prevA: number, curA: number): boolean {
+  const lo = Math.min(prevA, curA) - half;
+  const hi = Math.max(prevA, curA) + half;
   return da >= lo && da <= hi;
 }
 
@@ -467,9 +508,10 @@ function meleeSweepHit(state: SimState, p: PlayerState, prevA: number, curA: num
   const spec = meleeSpec(p.cls);
   for (const target of state.players) {
     if (target.team === p.team || !isAlive(target)) continue;
-    const da = relAngle(p, target, spec.reach);
-    if (da === null || !stickCrossed(da, prevA, curA)) continue;
-    const firstOnTarget = !p.swingHitIds.includes(target.id);
+    const rel = relAngle(p, target, spec.reach);
+    if (rel === null || !stickCrossed(rel.da, rel.half, prevA, curA)) continue;
+    if (p.swingHitIds.includes(target.id)) continue; // 1パスにつき1ヒット（裁定23）
+    const firstOnTarget = p.swingHitsDone === 0;
 
     if (target.guarding) {
       // ジャスガ: 直前0.1秒以内の入力ならゲージ消費なし＋攻撃側を軽くのけぞらせる
@@ -511,7 +553,7 @@ function meleeSweepHit(state: SimState, p: PlayerState, prevA: number, curA: num
       const behind = tx * ax + ty * ay < 0;
       if (behind) gainShield(p, cappedSteal(p, state.t, BALANCE.saber.lifestealPerHit, BALANCE.saber.lifestealCapPerSecond));
     } else if (p.cls === "heavy") {
-      gainShield(p, result.total * SH.lifestealRatio);
+      gainShield(p, result.total * (p.cls === "heavy" ? SH.heavyLifestealRatio : SH.lifestealRatio));
       p.unifiedGauge = Math.min(BALANCE.unifiedGauge.max, p.unifiedGauge + BALANCE.unifiedGauge.knifeHitGain);
     } else {
       const heal = cappedSteal(p, state.t, BALANCE.jab.hpStealPerHit, BALANCE.jab.hpStealCapPerSecond);
@@ -581,6 +623,101 @@ function pathBlockedByWall(state: SimState, x1: number, y1: number, x2: number, 
   return minS;
 }
 
+/** グラウンドスラムの効果本体（裁定21: windup後に呼ばれる） */
+function detonateSlam(state: SimState, p: PlayerState, events: SimEvent[]): void {
+  const S = BALANCE.heavySkills;
+  state.bullets = state.bullets.filter((b) => !(b.ownerTeam !== p.team && Math.hypot(b.x - p.x, b.y - p.y) <= S.slam.radius));
+  for (const t of state.players) {
+    if (t.team === p.team || !isAlive(t) || t.invuln > 0) continue;
+    if (Math.hypot(t.x - p.x, t.y - p.y) <= S.slam.radius) applyCC(t, S.slam.staggerSeconds);
+  }
+  state.walls = state.walls.filter((w) => {
+    if (w.ownerTeam === p.team) return true;
+    const c = closestPointOnSegment(w.x1, w.y1, w.x2, w.y2, p.x, p.y);
+    if (c.d <= S.slam.radius) { events.push({ type: "wallBreak", id: w.id }); return false; }
+    return true;
+  });
+  state.smokes = state.smokes.filter((sm) => !(sm.owner !== p.id && Math.hypot(sm.x - p.x, sm.y - p.y) <= S.slam.radius));
+  // スキルリンク受付（裁定28）: のけぞりが切れるまでスタン弾／ポーションの着弾を待つ
+  state.slamZones.push({ owner: p.id, team: p.team, x: p.x, y: p.y, until: state.t + S.slam.staggerSeconds });
+}
+
+/** スラム痕跡に投擲物が着弾したときのスキルリンク（裁定28）。成立したら true */
+function trySlamLink(state: SimState, team: number, kind: "slamStun" | "slamPotion", x: number, y: number, owner: PlayerId, events: SimEvent[]): boolean {
+  const R = BALANCE.heavySkills.slam.radius;
+  const zone = state.slamZones.find((z) => z.team === team && state.t <= z.until && Math.hypot(z.x - x, z.y - y) <= R);
+  if (!zone) return false;
+  if (kind === "slamStun") {
+    for (const t of state.players) {
+      if (t.team === team || !isAlive(t) || t.invuln > 0) continue;
+      if (Math.hypot(t.x - zone.x, t.y - zone.y) <= R) applyCC(t, BALANCE.link.slamStun.stunSeconds);
+    }
+  } else {
+    for (const t of state.players) {
+      if (t.team !== team || !isAlive(t)) continue;
+      if (Math.hypot(t.x - zone.x, t.y - zone.y) <= R) {
+        const before = t.hp;
+        t.hp = Math.min(P.hp, t.hp + BALANCE.link.slamPotion.heal);
+        if (t.hp > before) events.push({ type: "heal", target: t.id, from: owner, amount: t.hp - before, x: t.x, y: t.y });
+      }
+    }
+  }
+  const owners: [PlayerId, PlayerId] = [zone.owner, owner];
+  state.linkCount += 1;
+  state.linkWindows.push({ until: state.t + BALANCE.link.damageWindowSeconds, owners, damage: 0 });
+  events.push({ type: "slamLink", pair: kind, x: zone.x, y: zone.y, ox: x, oy: y, radius: R });
+  events.push({ type: "link", pair: kind, owners, x: zone.x, y: zone.y });
+  return true;
+}
+
+/** ビルドウォールを設置する（裁定21: 構えを離した位置・最大5キャラ分） */
+function placeWall(state: SimState, p: PlayerState, input: PlayerInput, events: SimEvent[]): void {
+  const S = BALANCE.heavySkills;
+  const maxD = S.wall.placeMaxPlayers * P.radius * 2;
+  const d = Math.min(Math.max(0, input.aimDist), maxD);
+  const cx = Math.min(Math.max(P.radius, p.x + Math.cos(p.aim) * d), F.width - P.radius);
+  const cy = Math.min(Math.max(P.radius, p.y + Math.sin(p.aim) * d), F.height - P.radius);
+  const half = (S.wall.lengthPlayers * P.radius * 2) / 2;
+  // 壁はカーソル方向に対して直交に立てる（従来と同じ向きの決め方）
+  const nx = Math.cos(p.aim + Math.PI / 2);
+  const ny = Math.sin(p.aim + Math.PI / 2);
+  const wallId = state.nextId++;
+  state.walls.push({
+    id: wallId,
+    owner: p.id,
+    ownerTeam: p.team,
+    x1: cx - nx * half, y1: cy - ny * half,
+    x2: cx + nx * half, y2: cy + ny * half,
+    hp: S.wall.hp,
+    expire: state.t + S.wall.seconds,
+    breach: false,
+    echo: false,
+  });
+  recordSkill(state, p, "wall", wallId);
+}
+
+/** バレットプルーフを自分に使う（単押し・裁定26） */
+function applyBulletproof(p: PlayerState): void {
+  const S = BALANCE.supportSkills;
+  p.invuln = Math.max(p.invuln, S.bell.invulnSeconds);
+  p.cc = 0;
+  p.guardBreak = 0;
+}
+
+/** ポーション着弾（裁定26）: 範囲の味方を回復。自分は selfRatio 倍だけ回復する */
+function detonatePotion(state: SimState, owner: PlayerState, x: number, y: number, events: SimEvent[]): void {
+  const S = BALANCE.supportSkills.areaHeal;
+  for (const t of state.players) {
+    if (t.team !== owner.team || !isAlive(t)) continue;
+    if (Math.hypot(t.x - x, t.y - y) > S.radius) continue;
+    const amount = t.id === owner.id ? S.heal * S.selfRatio : S.heal;
+    const before = t.hp;
+    t.hp = Math.min(P.hp, t.hp + amount);
+    if (t.hp > before) events.push({ type: "heal", target: t.id, from: owner.id, amount: t.hp - before, x: t.x, y: t.y });
+  }
+  trySlamLink(state, owner.team, "slamPotion", x, y, owner.id, events);
+}
+
 function useSkill(state: SimState, p: PlayerState, index: 0 | 1 | 2, input: PlayerInput, events: SimEvent[]): void {
   const lock = p.skillLock[index];
   if (lock > 0 || p.skillCd[index] > 0) return;
@@ -610,9 +747,11 @@ function useSkill(state: SimState, p: PlayerState, index: 0 | 1 | 2, input: Play
         tx = p.x + (tx - p.x) * s;
         ty = p.y + (ty - p.y) * s;
       }
+      const fromX = p.x, fromY = p.y;
       p.x = Math.min(F.width - P.radius, Math.max(P.radius, tx));
       p.y = Math.min(F.height - P.radius, Math.max(P.radius, ty));
       p.dashFreeUntil = state.t + BALANCE.turnLock.dashExemptSeconds;
+      events.push({ type: "sonic", owner: p.id, fromX, fromY, x: p.x, y: p.y });
       recordSkill(state, p, "dash", null);
     } else if (index === 1) {
       if (!spendGauge(S.smoke.cost, "escape")) return;
@@ -628,39 +767,16 @@ function useSkill(state: SimState, p: PlayerState, index: 0 | 1 | 2, input: Play
   } else if (p.cls === "heavy") {
     const S = BALANCE.heavySkills;
     if (index === 0) {
+      // 裁定21: ゲージは構え開始時に消費し、windup後に発動する（中断しても返らない）
+      if (p.slamT > 0) return;
       if (!spendGauge(S.slam.cost, "unified")) return;
-      state.bullets = state.bullets.filter((b) => !(b.ownerTeam !== p.team && Math.hypot(b.x - p.x, b.y - p.y) <= S.slam.radius));
-      for (const t of state.players) {
-        if (t.team === p.team || !isAlive(t) || t.invuln > 0) continue;
-        if (Math.hypot(t.x - p.x, t.y - p.y) <= S.slam.radius) applyCC(t, S.slam.staggerSeconds);
-      }
-      state.walls = state.walls.filter((w) => {
-        if (w.ownerTeam === p.team) return true;
-        const c = closestPointOnSegment(w.x1, w.y1, w.x2, w.y2, p.x, p.y);
-        if (c.d <= S.slam.radius) { events.push({ type: "wallBreak", id: w.id }); return false; }
-        return true;
-      });
-      state.smokes = state.smokes.filter((sm) => !(sm.owner !== p.id && Math.hypot(sm.x - p.x, sm.y - p.y) <= S.slam.radius));
+      p.slamT = S.slam.windupSeconds;
+      events.push({ type: "slamWindup", owner: p.id });
     } else if (index === 1) {
+      // 裁定21: 押した瞬間にゲージを消費して「構え」に入る。離した位置に設置される
+      if (p.wallAiming) return;
       if (!spendGauge(S.wall.cost, "unified")) return;
-      const cx = p.x + Math.cos(p.aim) * S.wall.placeDistance;
-      const cy = p.y + Math.sin(p.aim) * S.wall.placeDistance;
-      const half = (S.wall.lengthPlayers * P.radius * 2) / 2;
-      const nx = Math.cos(p.aim + Math.PI / 2);
-      const ny = Math.sin(p.aim + Math.PI / 2);
-      const wallId = state.nextId++;
-      state.walls.push({
-        id: wallId,
-        owner: p.id,
-        ownerTeam: p.team,
-        x1: cx - nx * half, y1: cy - ny * half,
-        x2: cx + nx * half, y2: cy + ny * half,
-        hp: S.wall.hp,
-        expire: state.t + S.wall.seconds,
-        breach: false,
-        echo: false,
-      });
-      recordSkill(state, p, "wall", wallId);
+      p.wallAiming = true;
     } else {
       // かばう: 2vs2は味方へ吸着ダッシュ＋到着後3秒シェル。1vs1・乱闘は前方ダッシュ＋1秒シェル（SPEC 6.2）
       if (!spendGauge(S.cover.cost, "unified")) return;
@@ -700,21 +816,14 @@ function useSkill(state: SimState, p: PlayerState, index: 0 | 1 | 2, input: Play
   } else {
     const S = BALANCE.supportSkills;
     if (index === 0) {
-      p.skillCd[0] = S.bell.cooldown;
-      p.invuln = Math.max(p.invuln, S.bell.invulnSeconds);
-      p.cc = 0;
-      p.guardBreak = 0;
+      // バレットプルーフ（裁定26）: 押した瞬間は構えるだけ。CDは離したときに消費する
+      if (p.bellAiming) return;
+      p.bellAiming = true;
+      p.bellHoldT = 0;
     } else if (index === 1) {
-      p.skillCd[1] = S.areaHeal.cooldown;
-      recordSkill(state, p, "areaHeal", null);
-      for (const t of state.players) {
-        if (t.id === p.id || t.team !== p.team || !isAlive(t)) continue; // 自己回復は素手のみ（SPEC 6.3）
-        if (Math.hypot(t.x - p.x, t.y - p.y) <= S.areaHeal.radius) {
-          const before = t.hp;
-          t.hp = Math.min(P.hp, t.hp + S.areaHeal.heal);
-          if (t.hp > before) events.push({ type: "heal", target: t.id, from: p.id, amount: t.hp - before, x: t.x, y: t.y });
-        }
-      }
+      // ポーション（裁定26）: 押す→離すでカーソル位置へ投擲。CDは離したときに消費する
+      if (p.potionAiming) return;
+      p.potionAiming = true;
     } else {
       p.skillCd[2] = S.stun.cooldown;
       p.invuln = 0;
@@ -726,10 +835,9 @@ function useSkill(state: SimState, p: PlayerState, index: 0 | 1 | 2, input: Play
 }
 
 // ---------------- 層2合体技（SPEC 7.2） ----------------
-const LINK_DEFS: ReadonlyArray<{ pair: "breach" | "echoWall" | "mistSignal"; a: SkillRecord["kind"]; b: SkillRecord["kind"] }> = [
+const LINK_DEFS: ReadonlyArray<{ pair: LinkPair; a: SkillRecord["kind"]; b: SkillRecord["kind"] }> = [
   { pair: "breach", a: "wall", b: "dash" },
-  { pair: "echoWall", a: "wall", b: "areaHeal" },
-  { pair: "mistSignal", a: "smoke", b: "stun" },
+  { pair: "lightning", a: "smoke", b: "stun" },
 ];
 
 function recordSkill(state: SimState, p: PlayerState, kind: SkillRecord["kind"], refId: number | null): void {
@@ -784,14 +892,6 @@ function applyPendingLinks(state: SimState, events: SimEvent[]): void {
         const p = state.players.find((q) => q.id === id);
         if (p && p.cls === "speed") p.markBoostUntil = state.t + BALANCE.link.breach.markBoostSeconds;
       }
-    } else if (link.pair === "echoWall") {
-      const wall = state.walls.find((w) => w.id === link.refA);
-      if (wall) {
-        wall.echo = true;
-        wall.expire += BALANCE.link.echoWall.extraSeconds;
-        at.x = (wall.x1 + wall.x2) / 2;
-        at.y = (wall.y1 + wall.y2) / 2;
-      }
     } else {
       const smoke = state.smokes.find((sm) => sm.id === link.refA);
       const bullet = state.bullets.find((b) => b.id === link.refB);
@@ -804,7 +904,7 @@ function applyPendingLinks(state: SimState, events: SimEvent[]): void {
         for (const t of state.players) {
           if (t.team === link.team || !isAlive(t) || t.invuln > 0) continue;
           if (Math.hypot(t.x - smoke.x, t.y - smoke.y) <= smoke.radius) {
-            applyCC(t, BALANCE.link.mistSignal.stunSeconds);
+            applyCC(t, BALANCE.link.lightning.stunSeconds);
             events.push({ type: "hit", target: t.id, attacker: link.owners[0]!, x: t.x, y: t.y, damage: 0, center: false, guarded: false, melee: false });
           }
         }
@@ -838,6 +938,9 @@ function resolveBulletPlayerHit(state: SimState, b: BulletState, target: PlayerS
       target.skillCd[2] + BALANCE.supportSkills.stun.cdDelaySeconds,
     ];
     events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: 0, center: false, guarded: false, melee: false });
+    // 裁定27: 通常ヒットで「次の狙撃が即最大溜め」を獲得（スピード型の粘着対策）
+    const shooter = state.players.find((q) => q.id === b.owner);
+    if (shooter) shooter.snipeBoostUntil = state.t + BALANCE.supportSkills.stun.snipeBoostSeconds;
     return;
   }
 
@@ -864,7 +967,7 @@ function resolveBulletPlayerHit(state: SimState, b: BulletState, target: PlayerS
   events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: result.total, center, guarded: false, melee: false });
 
   if (attacker) {
-    gainShield(attacker, result.total * SH.lifestealRatio);
+    gainShield(attacker, result.total * (attacker.cls === "heavy" ? SH.heavyLifestealRatio : SH.lifestealRatio));
     if (b.kind === "hmg") attacker.unifiedGauge = Math.min(BALANCE.unifiedGauge.max, attacker.unifiedGauge + BALANCE.unifiedGauge.hmgHitGain);
     if (b.kind === "pistol" && attacker.cls === "speed") {
       const prev = target.marks && target.marks.from === attacker.id && state.t < target.marks.expire ? target.marks.stacks : 0;
@@ -899,6 +1002,11 @@ export function judgeTimeout(state: SimState): MatchResult {
   if (first.lives !== second.lives) return { winner: first.id, winnerTeam: first.team, reason: "timeout-lives" };
   if (first.hp !== second.hp) return { winner: first.id, winnerTeam: first.team, reason: "timeout-hp" };
   return { winner: null, winnerTeam: null, reason: "draw" };
+}
+
+function clearHeavyCharges(p: PlayerState): void {
+  p.wallAiming = false;
+  p.slamT = 0;
 }
 
 function respawnPlayer(state: SimState, p: PlayerState, events: SimEvent[]): void {
@@ -954,6 +1062,13 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
   const events: SimEvent[] = [];
   if (prev.phase === "ended") return { state: prev, events };
 
+  // 開始カウントダウン中（裁定16）は時間も含めて一切進めない
+  if (prev.countdown > 0) {
+    const left = Math.max(0, prev.countdown - dt);
+    if (Math.ceil(left) !== Math.ceil(prev.countdown)) events.push({ type: "countdown", left: Math.ceil(left) });
+    return { state: { ...prev, countdown: left }, events };
+  }
+
   const state: SimState = {
     ...prev,
     t: prev.t + dt,
@@ -963,6 +1078,9 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     bullets: prev.bullets.map((b) => ({ ...b })),
     walls: prev.walls.map((w) => ({ ...w })),
     smokes: prev.smokes.map((s) => ({ ...s })),
+    // 裁定28の受付枠。複製しないと前フレームの状態を書き換えてしまい、
+    // 破棄しないと無限に伸びてスナップショットが肥大化する
+    slamZones: prev.slamZones.filter((z) => prev.t <= z.until).map((z) => ({ ...z })),
     recentSkills: [...prev.recentSkills],
     pendingLinks: [...prev.pendingLinks],
     linkWindows: prev.linkWindows.map((w) => ({ ...w })),
@@ -1061,14 +1179,75 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       if (input.skill2) useSkill(state, p, 1, input, events);
       if (input.skill3) useSkill(state, p, 2, input, events);
 
+      // バレットプルーフの構え（裁定26）: 単押し=自分／長押し=選んだ味方へ追尾投擲
+      if (p.bellAiming) {
+        p.bellHoldT += dt;
+        const SB = BALANCE.supportSkills.bell;
+        if (input.fire2) {
+          p.bellAiming = false; // 右クリックでキャンセル（CDは消費しない）
+        } else if (!input.skill1Held) {
+          p.bellAiming = false;
+          if (p.bellHoldT < SB.tapSeconds) {
+            applyBulletproof(p);
+            p.skillCd[0] = SB.cooldown;
+          } else {
+            const ally = input.aimAllyId ? state.players.find((q) => q.id === input.aimAllyId && q.team === p.team && isAlive(q)) : undefined;
+            if (ally) {
+              const ang = Math.atan2(ally.y - p.y, ally.x - p.x);
+              const b = spawnBullet(state, p, "bell", ang, SB.bulletSpeed, 0, SB.bulletRadius, false, 0);
+              b.homingId = ally.id;
+              p.skillCd[0] = SB.cooldown;
+            }
+            // 対象がいなければ不発（CDも消費しない）
+          }
+        }
+      }
+
+      // ポーションの構え（裁定26）
+      if (p.potionAiming) {
+        const SP = BALANCE.supportSkills.areaHeal;
+        if (input.fire2) {
+          p.potionAiming = false;
+        } else if (!input.skill2Held) {
+          p.potionAiming = false;
+          const maxD = SP.throwMaxPlayers * P.radius * 2;
+          const d = Math.min(Math.max(0, input.aimDist), maxD);
+          const tx = Math.min(Math.max(P.radius, p.x + Math.cos(p.aim) * d), F.width - P.radius);
+          const ty = Math.min(Math.max(P.radius, p.y + Math.sin(p.aim) * d), F.height - P.radius);
+          const b = spawnBullet(state, p, "potion", p.aim, SP.bulletSpeed, 0, SP.bulletRadius, false, 0);
+          b.tx = tx;
+          b.ty = ty;
+          p.skillCd[1] = SP.cooldown;
+          recordSkill(state, p, "areaHeal", b.id); // リンク判定は投げた瞬間に記録
+        }
+      }
+
+      // ビルドウォールの構え（裁定21）: 右クリックでキャンセル（ゲージは返らない）／離すと設置
+      if (p.wallAiming) {
+        if (input.fire2) {
+          p.wallAiming = false;
+          events.push({ type: "wallAim", owner: p.id, cancelled: true });
+        } else if (!input.skill2Held) {
+          p.wallAiming = false;
+          placeWall(state, p, input, events);
+        }
+      }
+
       // 攻撃（裁定10: 左クリック=主武器 / 右クリック=副武器。武器切替という操作は廃止）
       if (!p.guarding) {
         const list = WEAPONS[p.cls];
         useWeapon(state, p, list[0]!, false, input.fire, p.prevFire, input, dt, events);
-        useWeapon(state, p, list[1]!, true, input.fire2, p.prevFire2, input, dt, events);
+        // ビルドウォール構え中の右クリックはキャンセル専用（裁定21）
+        if (!p.wallAiming) useWeapon(state, p, list[1]!, true, input.fire2, p.prevFire2, input, dt, events);
       }
     } else {
       p.guarding = false;
+    }
+
+    // グラウンドスラムの溜め進行（裁定21）
+    if (p.slamT > 0) {
+      p.slamT = Math.max(0, p.slamT - dt);
+      if (p.slamT <= 0) detonateSlam(state, p, events);
     }
 
     // 近接スイング進行（CC中は startSwing 側で止まる。進行中は継続）
@@ -1077,6 +1256,11 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       p.swingT = Math.max(0, p.swingT - dt);
       const elapsed = spec.total - p.swingT;
       // 棒の掃き（裁定13）: 前tickの角度から今tickの角度まで動く間に横切った相手へヒット
+      const curPass = stickPassAt(spec, elapsed);
+      if (curPass !== null && curPass !== p.swingPass) {
+        p.swingPass = curPass;
+        p.swingHitIds = [];
+      }
       const curAngle = stickAngleAt(spec, elapsed);
       if (curAngle !== null) {
         const prevAngle = p.swingAngle ?? curAngle;
@@ -1169,18 +1353,63 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       }
     }
 
+    // バレットプルーフ: 指定した味方を追尾（裁定26）
+    if (b.kind === "bell" && b.homingId) {
+      const t = state.players.find((q) => q.id === b.homingId && isAlive(q));
+      if (t) {
+        const want = Math.atan2(t.y - b.y, t.x - b.x);
+        const cur = Math.atan2(b.vy, b.vx);
+        let da = want - cur;
+        while (da > Math.PI) da -= Math.PI * 2;
+        while (da < -Math.PI) da += Math.PI * 2;
+        const lim = BALANCE.supportSkills.bell.homingRadPerSecond * dt;
+        const turn = Math.max(-lim, Math.min(lim, da));
+        const sp = Math.hypot(b.vx, b.vy);
+        b.vx = Math.cos(cur + turn) * sp;
+        b.vy = Math.sin(cur + turn) * sp;
+      }
+    }
+
     const px = b.x, py = b.y;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
 
-    // ミストシグナル: 対象スタン弾が対象スモーク内に入ると炸裂（SPEC 7.2）
+    // ポーション: 指定地点に到達したら炸裂（裁定26）。途中の敵や壁は貫通する
+    if (b.kind === "potion" && b.tx !== undefined && b.ty !== undefined) {
+      const owner = state.players.find((q) => q.id === b.owner);
+      const before = Math.hypot(px - b.tx, py - b.ty);
+      const now = Math.hypot(b.x - b.tx, b.y - b.ty);
+      if (owner && (now <= b.radius + 4 || now > before)) {
+        detonatePotion(state, owner, b.tx, b.ty, events);
+        continue;
+      }
+      aliveBullets.push(b);
+      continue;
+    }
+    // バレットプルーフ: 対象の味方に届いたら無敵付与（裁定26）
+    if (b.kind === "bell") {
+      const t = b.homingId ? state.players.find((q) => q.id === b.homingId) : undefined;
+      if (!t || !isAlive(t)) continue; // 対象が消えたら弾も消える
+      if (Math.hypot(b.x - t.x, b.y - t.y) <= P.radius + b.radius) {
+        applyBulletproof(t);
+        events.push({ type: "heal", target: t.id, from: b.owner, amount: 0, x: t.x, y: t.y });
+        continue;
+      }
+      aliveBullets.push(b);
+      continue;
+    }
+
+    // スラム×スタン（裁定28）: のけぞりが切れる前にスタン弾がスラム範囲へ入ると感電が広がる
+    if (b.kind === "stun" && trySlamLink(state, b.ownerTeam, "slamStun", b.x, b.y, b.owner, events)) continue;
+
+    // ライトニング: 対象スタン弾が対象クラウド内に入ると炸裂（SPEC 7.2）
     if (b.mist && b.kind === "stun") {
       const smoke = state.smokes.find((sm) => sm.mist && sm.ownerTeam === b.ownerTeam && Math.hypot(b.x - sm.x, b.y - sm.y) <= sm.radius);
       if (smoke) {
         for (const t of state.players) {
           if (t.team === b.ownerTeam || !isAlive(t) || t.invuln > 0) continue;
           if (Math.hypot(t.x - smoke.x, t.y - smoke.y) <= smoke.radius) {
-            applyCC(t, BALANCE.link.mistSignal.stunSeconds);
+            applyCC(t, BALANCE.link.lightning.stunSeconds);
             events.push({ type: "hit", target: t.id, attacker: b.owner, x: t.x, y: t.y, damage: 0, center: false, guarded: false, melee: false });
           }
         }
@@ -1220,7 +1449,6 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
           b.vx -= 2 * dot * nx;
           b.vy -= 2 * dot * ny;
           b.reflectsLeft -= 1;
-          if (w.echo && b.ownerTeam === w.ownerTeam) b.boost = BALANCE.link.echoWall.boostMultiplier; // エコーウォール
 
           const sp = Math.hypot(b.vx, b.vy) || 1;
           const off = BALANCE.heavySkills.wall.thickness / 2 + b.radius + 2;

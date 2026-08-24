@@ -19,6 +19,8 @@ export const BALANCE = {
   /** 論理フィールド寸法。「画面幅」の基準（距離減衰・高速移動の%はこの幅に対する割合） */
   field: { width: 1280, height: 720 },
   tickRate: 60,
+  /** 開始カウントダウン（裁定16）: 3→2→1 を表示してから開始 */
+  countdownSeconds: 3,
   matchSeconds: 120,
 
   /** 2vs2（SPEC 5.4 / 6.2） */
@@ -43,17 +45,19 @@ export const BALANCE = {
     killHealHp: 10,
   },
 
-  /** クラス別（SPEC 16章: 被ダメ1.3/0.85/1.0、横断1.2/2.0/1.5秒、シールド50/100/50） */
+  /** クラス別（裁定24: 横断はスピード2.1秒／タンク・支援は2.5秒で統一。被ダメ・シールドは据え置き） */
   classes: {
-    speed: { crossSeconds: cross(1.2), damageTaken: 1.3, shieldMax: 50, shieldTimeRegen: true },
-    heavy: { crossSeconds: cross(2.0), damageTaken: 0.85, shieldMax: 100, shieldTimeRegen: false },
-    support: { crossSeconds: cross(1.5), damageTaken: 1.0, shieldMax: 50, shieldTimeRegen: true },
+    speed: { crossSeconds: 2.1, damageTaken: 1.3, shieldMax: 50, shieldTimeRegen: true },
+    heavy: { crossSeconds: 2.5, damageTaken: 0.85, shieldMax: 100, shieldTimeRegen: false },
+    support: { crossSeconds: 2.5, damageTaken: 1.0, shieldMax: 50, shieldTimeRegen: true },
   },
 
   shield: {
     regenDelaySeconds: 2,
     regenPerSecond: 15,
     lifestealRatio: 0.5,
+    /** 裁定20: 重量型はHMGダメージ半減の副作用を打ち消すため回収率100% */
+    heavyLifestealRatio: 1.0,
   },
 
   guard: {
@@ -90,14 +94,15 @@ export const BALANCE = {
     markMax: 3,
     markSeconds: 4,
   },
+  /** 刀（旧セイバー）。裁定25: 2往復をやめ、重厚感のある一振りに */
   saber: {
-    swingSeconds: 0.5, // 攻撃0〜0.4秒・硬直0.1秒
-    activeSeconds: 0.4,
-    hits: 4,
-    /** 裁定13: 棒が扇を掃く方式。2往復＝4パス。中心通過は 0.05/0.15/0.25/0.35（旧hitTimesと一致） */
-    sweep: { start: 0, passes: 4, passSeconds: 0.1 },
-    damagePerHit: 3, // 計12
-    lifestealPerHit: 2, // 背面180度限定
+    swingSeconds: 0.55, // 振り0.3秒＋硬直0.25秒（単発なので硬直を厚めに）
+    activeSeconds: 0.3,
+    hits: 1,
+    /** 1パス。中心通過0.15秒 */
+    sweep: { start: 0, passes: 1, passSeconds: 0.3 },
+    damagePerHit: 14, // 一振り14（旧: 3×4=12。単発化で当て損ないのリスクが上がるぶん微増）
+    lifestealPerHit: 8, // 背面180度限定（旧2×4=8相当を1ヒットに集約）
     lifestealCapPerSecond: 12,
     reach: px(74),
     arcRadians: 1.15, // 片側（約66°）
@@ -114,8 +119,10 @@ export const BALANCE = {
     gaugeMax: 100,
     gaugeRegenPerSecond: 12,
     sameSkillLockSeconds: 0.8,
-    dash: { cost: 35, distanceRatio: ratio(0.12) }, // 画面幅12%
-    smoke: { cost: 30, radius: px(90), seconds: 2 },
+    /** ソニック（旧・高速移動）。裁定24: 距離をキャラ0.8体分ぶん延長 */
+    dash: { cost: 35, distanceRatio: ratio(0.12) + (0.8 * 24 * 2) / 1280 },
+    /** クラウド（旧・スモーク）。裁定24: 中で動けるよう半径2倍 */
+    smoke: { cost: 30, radius: px(180), seconds: 2 },
     overload: { cooldown: 10, shots: 2, damageMultiplier: 3, expireSeconds: 4 },
   },
 
@@ -128,8 +135,8 @@ export const BALANCE = {
   },
   hmg: {
     shotsPerSecond: 6,
-    damage: 4,
-    magazine: 40,
+    damage: 2, // 裁定20: 当てやすさに対する火力是正（旧4）
+    magazine: 30, // 裁定20: 旧40
     reloadSeconds: 2,
     spinupSeconds: 0.4,
     spreadStartRad: (9 * Math.PI) / 180,
@@ -151,8 +158,10 @@ export const BALANCE = {
   },
   heavySkills: {
     sameSkillLockSeconds: 0.8,
-    slam: { cost: 60, radius: px(150), staggerSeconds: 0.5 },
-    wall: { cost: 70, lengthPlayers: 2.5, hp: 80, seconds: 2.5, thickness: px(12), placeDistance: px(70) },
+    /** 裁定21: 発動前に windupSeconds の溜め（範囲は敵にも見える） */
+    slam: { cost: 60, radius: px(150), staggerSeconds: 0.5, windupSeconds: 0.35 },
+    /** ビルドウォール（裁定21）: 長押しで構え、離した位置に設置。最大5キャラ分まで */
+    wall: { cost: 70, lengthPlayers: 2.5, hp: 80, seconds: 2.5, thickness: px(12 * 1.3), placeMaxPlayers: 5 },
     cover: { cost: 50, fallbackDashDistance: px(110), fallbackShellSeconds: 1, shellDamageCut: 0.6 },
   },
 
@@ -170,6 +179,8 @@ export const BALANCE = {
     speedBase: px(1100),
     speedMaxMultiplier: 1.2,
     moveMultiplierWhileCharging: 0.85,
+    /** 裁定27: スタン弾ヒット後の即最大溜め弾は通常の最大溜めの60% */
+    boostDamageRatio: 0.6,
     wallReflects: 1,
   },
   healShot: {
@@ -194,9 +205,12 @@ export const BALANCE = {
   calmAura: { radius: px(96), healPerSecond: 2, calmSeconds: 4 },
 
   supportSkills: {
-    bell: { cooldown: 14, invulnSeconds: 0.75 },
-    areaHeal: { cooldown: 10, radius: px(170), heal: 20 },
-    stun: { cooldown: 12, stunSeconds: 0.5, cdDelaySeconds: 2, bulletSpeed: px(1000), bulletRadius: px(7) },
+    /** バレットプルーフ（旧・鈴／裁定26）: 単押し=自分／長押し=味方を選んで投擲（追尾・高速） */
+    bell: { cooldown: 14, invulnSeconds: 0.75, tapSeconds: 0.15, bulletSpeed: px(1500), bulletRadius: px(9), homingRadPerSecond: 12 },
+    /** ポーション（旧・範囲回復／裁定26）: 押す→離すでカーソル位置へ低速投擲。自分は3割回復 */
+    areaHeal: { cooldown: 10, radius: px(170), heal: 20, bulletSpeed: px(300), bulletRadius: px(11), selfRatio: 0.3, throwMaxPlayers: 8 },
+    /** スタン弾。裁定27: 通常ヒットで「次の狙撃が即最大溜め」を獲得（粘着対策） */
+    stun: { cooldown: 12, stunSeconds: 0.5, cdDelaySeconds: 2, bulletSpeed: px(1000), bulletRadius: px(7), snipeBoostSeconds: 6 },
   },
 
   /** 層2合体技（SPEC 7.2）: 0.5秒以内の相互発動＋距離が画面幅25%以内→0.3秒の構え→LINKボーナス */
@@ -205,8 +219,12 @@ export const BALANCE = {
     maxDistanceRatio: ratio(0.25),
     stanceSeconds: 0.3,
     breach: { markBoostSeconds: 2, markBoostMultiplier: 2 },
-    echoWall: { extraSeconds: 1.5, boostMultiplier: 1.25 },
-    mistSignal: { stunSeconds: 0.4 },
+    /** ライトニング（旧・ミストシグナル）: クラウド×スタン弾 */
+    lightning: { stunSeconds: 0.4 },
+    /** スラム×スタン弾: スラム範囲の敵を0.5秒スタン（裁定28） */
+    slamStun: { stunSeconds: 0.5 },
+    /** スラム×ポーション: スラム範囲の味方（支援型自身も含む）に追加20回復（裁定28） */
+    slamPotion: { heal: 20 },
     /** 最大連携ダメージの集計窓（成立後3秒・実装判断＝調整枠） */
     damageWindowSeconds: 3,
   },

@@ -5,7 +5,7 @@ import { button, FONT, title } from "../ui";
 
 const F = BALANCE.field;
 const ORDER: CharClass[] = ["speed", "heavy", "support"];
-const CLASS_NAME: Record<CharClass, string> = { speed: "スピード型", heavy: "重量型", support: "支援型" };
+const CLASS_NAME: Record<CharClass, string> = { speed: "スピード型", heavy: "タンク", support: "支援型" };
 const CLASS_COLOR: Record<CharClass, number> = { speed: 0x22d3ee, heavy: 0xfb923c, support: 0xa3e635 };
 
 /** 数値の丸め（小数第1位まで、整数なら整数表示） */
@@ -28,7 +28,7 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
   const stats: Row[] = [
     { label: "移動速度", value: `画面を${n(C.crossSeconds)}秒で横断` },
     { label: "被ダメージ", value: `×${n(C.damageTaken, 2)}` },
-    { label: "シールド", value: `${shieldMaxOf(cls)}（${C.shieldTimeRegen ? "被弾なし2秒で自然回復" : "時間回復なし・攻撃で回収"}）` },
+    { label: "シールド", value: `${shieldMaxOf(cls)}（${C.shieldTimeRegen ? "被弾なし2秒で自然回復" : `時間回復なし・与ダメージの${n((BALANCE.shield.heavyLifestealRatio) * 100, 0)}%を回収`}）` },
     { label: "HP", value: String(BALANCE.player.hp) },
   ];
 
@@ -45,19 +45,19 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
       ],
       stats,
       weapons: [
-        { label: "左クリック：セイバー", value: `${S.hits}ヒット計${S.damagePerHit * S.hits}ダメ・リーチ${n(S.reach, 0)}・1振り${n(S.swingSeconds, 2)}秒。背面から当てるとシールド+${S.lifestealPerHit}/hit。振り中に敵弾を消せる` },
+        { label: "左クリック：刀", value: `${S.hits}ヒット計${S.damagePerHit * S.hits}ダメ・リーチ${n(S.reach, 0)}・1振り${n(S.swingSeconds, 2)}秒。背面から当てるとシールド+${S.lifestealPerHit}/hit。振り中に敵弾を消せる` },
         { label: "右クリック：ピストル", value: `毎秒${Pl.shotsPerSecond}発・${Pl.damage}ダメ・装弾${Pl.magazine}／リロード${n(Pl.reloadSeconds, 1)}秒。命中でマーク付与（最大${Pl.markMax}・${n(Pl.markSeconds, 0)}秒）` },
       ],
       skills: [
-        { label: "スキル1：高速移動", value: `逃げゲージ${K.dash.cost}消費・画面幅${n(K.dash.distanceRatio * 100, 1)}%を瞬間移動。直後${n(BALANCE.turnLock.dashExemptSeconds, 1)}秒は切り返し硬直なし` },
-        { label: "スキル2：スモーク", value: `逃げゲージ${K.smoke.cost}消費・半径${n(K.smoke.radius, 0)}の煙を${n(K.smoke.seconds, 1)}秒展開。射線を切って仕切り直す` },
-        { label: "スキル3：過装填", value: `CD${n(K.overload.cooldown, 0)}秒。次の${K.overload.shots}発が${K.overload.damageMultiplier}倍（${n(K.overload.expireSeconds, 0)}秒で失効）` },
+        { label: "スキル1：ソニック", value: `逃げゲージ${K.dash.cost}消費・画面幅${n(K.dash.distanceRatio * 100, 1)}%を瞬間移動。直後${n(BALANCE.turnLock.dashExemptSeconds, 1)}秒は切り返し硬直なし` },
+        { label: "スキル2：クラウド", value: `逃げゲージ${K.smoke.cost}消費・半径${n(K.smoke.radius, 0)}の煙を${n(K.smoke.seconds, 1)}秒展開。射線を切って仕切り直す` },
+        { label: "スキル3：チャージ", value: `CD${n(K.overload.cooldown, 0)}秒。次の${K.overload.shots}発が${K.overload.damageMultiplier}倍（${n(K.overload.expireSeconds, 0)}秒で失効）` },
       ],
       passive: [
         { label: "切り返し硬直", value: `${n((BALANCE.turnLock.minAngleRad * 180) / Math.PI, 0)}度以上の急な方向転換で最大${n(BALANCE.turnLock.at180, 2)}秒だけ足が止まる（照準と攻撃は通常どおり）` },
         { label: "逃げゲージ", value: `最大${K.gaugeMax}・毎秒${K.gaugeRegenPerSecond}回復。マーク回収で+${BALANCE.saber.markGaugeRefund}/枚` },
       ],
-      links: [`ブリーチ（重量型の壁と合わせる）：壁を味方だけすり抜け可能にし、マーク火力が${n(BALANCE.link.breach.markBoostMultiplier, 1)}倍に`, "ミストシグナル（支援型のスタン弾と合わせる）：スモーク内の敵全員をスタン"],
+      links: [`ブリーチ（タンクの壁と合わせる）：壁を味方だけすり抜け可能にし、マーク火力が${n(BALANCE.link.breach.markBoostMultiplier, 1)}倍に`, "ミストシグナル（支援型のスタン弾と合わせる）：スモーク内の敵全員をスタン"],
     };
   }
 
@@ -71,7 +71,7 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
       tips: [
         "シールドは時間で回復しない。ナイフを当てると与ダメージの50%が戻るので、削られたら踏み込む",
         "HMGは撃ち続けるほど弾がまとまる。細かく撃つより長く押す方が当たる",
-        "統合ゲージ1本で防御もスキルも賄う。壁とスラムの使いどころを決めておく",
+        "統合ゲージ1本で防御もスキルも賄う。ビルドウォールとスラムの使いどころを決めておく",
       ],
       stats,
       weapons: [
@@ -79,15 +79,19 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
         { label: "右クリック：ナイフ", value: `${K.damage}ダメ・リーチ${n(K.reach, 0)}・1振り${n(K.swingSeconds, 2)}秒。命中で統合ゲージ+${U.knifeHitGain}、与ダメージの50%がシールドに戻る` },
       ],
       skills: [
-        { label: "スキル1：グラウンドスラム", value: `ゲージ${S.slam.cost}消費・半径${n(S.slam.radius, 0)}の敵を${n(S.slam.staggerSeconds, 1)}秒のけぞらせ、範囲内の敵弾を消す` },
-        { label: "スキル2：壁", value: `ゲージ${S.wall.cost}消費・耐久${S.wall.hp}・${n(S.wall.seconds, 1)}秒。長さはキャラ${n(S.wall.lengthPlayers, 1)}体分。反射弾は耐久を削らない` },
+        { label: "スキル1：グラウンドスラム", value: `ゲージ${S.slam.cost}消費・${n(S.slam.windupSeconds, 2)}秒の溜めのあと発動。半径${n(S.slam.radius, 0)}の敵を${n(S.slam.staggerSeconds, 1)}秒のけぞらせ、範囲内の敵弾を消す。溜め中は範囲が敵にも見える` },
+        { label: "スキル2：ビルドウォール", value: `ゲージ${S.wall.cost}消費・耐久${S.wall.hp}・${n(S.wall.seconds, 1)}秒。長さはキャラ${n(S.wall.lengthPlayers, 1)}体分。長押しで構え、離すとカーソル位置（最大キャラ${S.wall.placeMaxPlayers}体分）に設置。構え中は右クリックでキャンセル（ゲージは戻らない）。反射弾は耐久を削らない` },
         { label: "スキル3：かばう", value: `ゲージ${S.cover.cost}消費。カーソル方向の味方へ吸着ダッシュし、${n(BALANCE.teams.cover.shellSeconds, 0)}秒のシェルで被ダメージを${n(S.cover.shellDamageCut * 100, 0)}%カット` },
       ],
       passive: [
         { label: "統合ゲージ", value: `最大${U.max}・非ガード時に毎秒${U.regenPerSecond}回復。HMG命中で+${U.hmgHitGain}、ナイフ命中で+${U.knifeHitGain}。防御もここから支払う` },
         { label: "ガードブレイク耐性", value: `ブレイク時の硬直が${n(BALANCE.guard.heavyBreakMultiplier * 100, 0)}%（${n(BALANCE.guard.breakStunSeconds * BALANCE.guard.heavyBreakMultiplier, 2)}秒）に短縮` },
       ],
-      links: ["ブリーチ（スピード型の高速移動と合わせる）：自分の壁を味方だけすり抜け可能にする", `エコーウォール（支援型の範囲回復と合わせる）：壁が${n(BALANCE.link.echoWall.extraSeconds, 1)}秒長持ちし、反射した味方弾が${n(BALANCE.link.echoWall.boostMultiplier, 2)}倍に`],
+      links: [
+        "ブリーチ（スピード型のソニックと合わせる）：自分のビルドウォールを味方だけすり抜け可能にする",
+        `ライトニングスラム（支援型のスタン弾と合わせる）：のけぞりが切れる前にスタン弾がスラム範囲へ届くと、範囲の敵全員が${n(BALANCE.link.slamStun.stunSeconds, 1)}秒スタン`,
+        `ヒールスラム（支援型のポーションと合わせる）：同じ条件で、スラム範囲の味方全員が追加で${BALANCE.link.slamPotion.heal}回復`,
+      ],
     };
   }
 
@@ -111,14 +115,18 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
       { label: "右クリック：ジャブ", value: `${J.damage}ダメ・リーチ${n(J.reach, 0)}（全近接中最短）・1振り${n(J.swingSeconds, 2)}秒。命中でHP+${J.hpStealPerHit}（毎秒${J.hpStealCapPerSecond}まで）` },
     ],
     skills: [
-      { label: "スキル1：鈴", value: `CD${n(K.bell.cooldown, 0)}秒・${n(K.bell.invulnSeconds, 2)}秒の無敵。撃たれる直前に合わせて使う` },
-      { label: "スキル2：範囲回復", value: `CD${n(K.areaHeal.cooldown, 0)}秒・半径${n(K.areaHeal.radius, 0)}の味方を${K.areaHeal.heal}回復` },
-      { label: "スキル3：スタン弾", value: `CD${n(K.stun.cooldown, 0)}秒・命中で${n(K.stun.stunSeconds, 1)}秒拘束＋相手のスキルCDを${n(K.stun.cdDelaySeconds, 0)}秒遅らせる` },
+      { label: "スキル1：バレットプルーフ", value: `CD${n(K.bell.cooldown, 0)}秒。単押しで自分に、長押しするとカーソルに近い味方を選んでフラスコを投げつける（高速追尾）。当たった相手は${n(K.bell.invulnSeconds, 2)}秒無敵になり、拘束も解除される。構え中は右クリックでキャンセル` },
+      { label: "スキル2：ポーション", value: `CD${n(K.areaHeal.cooldown, 0)}秒。押して離すとカーソル位置（最大キャラ${K.areaHeal.throwMaxPlayers}体分）へ低速で投擲。着弾で半径${n(K.areaHeal.radius, 0)}の味方を${K.areaHeal.heal}回復（自分は${n(K.areaHeal.selfRatio * 100, 0)}%の${n(K.areaHeal.heal * K.areaHeal.selfRatio, 0)}回復）。構え中は右クリックでキャンセル` },
+      { label: "スキル3：スタン弾", value: `CD${n(K.stun.cooldown, 0)}秒・命中で${n(K.stun.stunSeconds, 1)}秒拘束＋相手のスキルCDを${n(K.stun.cdDelaySeconds, 0)}秒遅らせる。命中後${n(K.stun.snipeBoostSeconds, 0)}秒以内なら、左クリックの単押しで即最大溜めの狙撃が撃てる（威力は最大溜めの${n(BALANCE.sniper.boostDamageRatio * 100, 0)}%＝${n(BALANCE.sniper.damageMax * BALANCE.sniper.boostDamageRatio, 0)}）` },
     ],
     passive: [
       { label: "静穏オーラ", value: `半径${n(A.radius, 0)}以内の味方（自分含む）を毎秒${A.healPerSecond}回復。最後に被弾してから${n(A.calmSeconds, 0)}秒経った相手だけが対象で、重ねがけはできない` },
     ],
-    links: [`エコーウォール（重量型の壁と合わせる）：壁が${n(BALANCE.link.echoWall.extraSeconds, 1)}秒長持ちし、反射した味方弾が強化される`, `ミストシグナル（スピード型のスモークと合わせる）：スモーク内の敵全員に${n(BALANCE.link.mistSignal.stunSeconds, 1)}秒のスタン`],
+    links: [
+      `ライトニング（スピード型のクラウドと合わせる）：クラウド内の敵全員に${n(BALANCE.link.lightning.stunSeconds, 1)}秒のスタン`,
+      `ライトニングスラム（タンクのグラウンドスラムと合わせる）：スラム範囲の敵全員が${n(BALANCE.link.slamStun.stunSeconds, 1)}秒スタン`,
+      `ヒールスラム（タンクのグラウンドスラムと合わせる）：スラム範囲の味方全員が追加で${BALANCE.link.slamPotion.heal}回復`,
+    ],
   };
 }
 

@@ -32,6 +32,14 @@ export function mouseMaskOf(name: string): number {
   return name === "MOUSE4" ? 8 : 16;
 }
 
+/** HUD用の短縮表示（[E] のように括弧内に出す） */
+export function bindShort(name: string): string {
+  if (name === "MOUSE4") return "M4";
+  if (name === "MOUSE5") return "M5";
+  if (name === "SPACE") return "SPC";
+  return name;
+}
+
 export function bindDisplay(name: string): string {
   if (name === "MOUSE4") return "マウス4（戻る）";
   if (name === "MOUSE5") return "マウス5（進む）";

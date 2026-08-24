@@ -20,7 +20,7 @@ import {
   type SimEvent,
   type SimState,
 } from "@pvp/shared";
-import { isMouseBind, loadBinds, mouseMaskOf, type BindAction } from "../keybinds";
+import { bindShort, isMouseBind, loadBinds, mouseMaskOf, type BindAction } from "../keybinds";
 import { COLORS, session } from "../session";
 import { BGM, SFX } from "../sound";
 import { button, FONT, label } from "../ui";
@@ -35,11 +35,11 @@ const KILL_SLOWMO_SECONDS = 0.3;
 const KILL_SLOWMO_SCALE = 0.3;
 
 const CLASS_COLOR: Record<string, number> = { speed: COLORS.speed, heavy: 0xfb923c, support: 0xa3e635 };
-const WEAPON_LABEL: Record<string, string> = { saber: "セイバー", pistol: "ピストル", hmg: "HMG", knife: "ナイフ", sniper: "スナイパー", heal: "回復弾", jab: "素手" };
+const WEAPON_LABEL: Record<string, string> = { saber: "刀", pistol: "ピストル", hmg: "HMG", knife: "ナイフ", sniper: "スナイパー", heal: "回復弾", jab: "素手" };
 const SKILL_LABEL: Record<string, [string, string, string]> = {
-  speed: ["高速移動 35", "スモーク 30", "過装填"],
-  heavy: ["スラム 60", "壁 70", "かばう 50"],
-  support: ["鈴", "範囲回復", "スタン弾"],
+  speed: ["ソニック 35", "クラウド 30", "チャージ"],
+  heavy: ["スラム 60", "ビルドウォール 70", "かばう 50"],
+  support: ["バレットプルーフ", "ポーション", "スタン弾"],
 };
 
 interface Snapshot { at: number; state: SimState }
@@ -65,13 +65,18 @@ export class GameScene extends Phaser.Scene {
   private gfx!: Phaser.GameObjects.Graphics;
   private hud!: Phaser.GameObjects.Text;
   private skillHud!: Phaser.GameObjects.Text;
+  private countText!: Phaser.GameObjects.Text;
+  private ammoText!: Phaser.GameObjects.Text;
+  private notice!: Phaser.GameObjects.Text;
   private names = new Map<PlayerId, Phaser.GameObjects.Text>();
   private keys!: Record<BindAction, Bind>;
   private mouseEdges: Partial<Record<BindAction, boolean>> = {};
+  /** HUDに出すキー表示（キー設定を反映） */
+  private bindNames = { guard: "SPACE", skill1: "E", skill2: "R", skill3: "F" };
   /** 押した瞬間を保持しておく入力ラッチ（裁定11） */
   private latch = { skill1: false, skill2: false, skill3: false };
   private menuOpen = false;
-  private menu!: Phaser.GameObjects.Container;
+  private menuObjects: Phaser.GameObjects.GameObject[] = [];
   private combo = 0;
   private comboAt = 0;
   private predicted: { x: number; y: number } | null = null;
@@ -105,6 +110,20 @@ export class GameScene extends Phaser.Scene {
     this.gfx = this.add.graphics();
     this.hud = this.add.text(F.width / 2, 14, "", { fontFamily: FONT, fontSize: "22px", color: COLORS.text }).setOrigin(0.5, 0);
     this.skillHud = this.add.text(F.width / 2, F.height - 14, "", { fontFamily: FONT, fontSize: "18px", color: COLORS.text }).setOrigin(0.5, 1);
+    this.notice = this.add
+      .text(16, 44, "", { fontFamily: FONT, fontSize: "16px", color: "#fbbf24", fontStyle: "bold" })
+      .setOrigin(0, 0)
+      .setAlpha(0)
+      .setDepth(500);
+    this.ammoText = this.add
+      .text(16, F.height - 16, "", { fontFamily: FONT, fontSize: "22px", color: "#fef08a" })
+      .setOrigin(0, 1);
+    this.countText = this.add
+      .text(F.width / 2, F.height / 2 - 30, "", { fontFamily: FONT, fontSize: "150px", color: "#67e8f9", fontStyle: "bold" })
+      .setOrigin(0.5)
+      .setShadow(0, 0, "#22d3ee", 30, true, true)
+      .setDepth(8000)
+      .setVisible(false);
     this.banner = this.add
       .text(F.width / 2, F.height / 2, "", { fontFamily: FONT, fontSize: "56px", color: "#fef08a", fontStyle: "bold" })
       .setOrigin(0.5)
@@ -126,10 +145,16 @@ export class GameScene extends Phaser.Scene {
       skill1: bind(binds.skill1), skill2: bind(binds.skill2), skill3: bind(binds.skill3),
     };
     this.mouseEdges = {};
+    this.bindNames = {
+      guard: bindShort(binds.guard),
+      skill1: bindShort(binds.skill1),
+      skill2: bindShort(binds.skill2),
+      skill3: bindShort(binds.skill3),
+    };
 
     // ESCメニュー（訓練場: リセット/ゲージ全快/キー設定/退出、対戦: キー設定/退出）
+    this.menuObjects = [];
     this.menuOpen = false;
-    this.buildMenu();
     this.input.keyboard!.on("keydown-ESC", () => this.toggleMenu());
     label(this, F.width - 60, 20, "ESC メニュー", 13, "#475569");
     this.combo = 0;
@@ -156,7 +181,7 @@ export class GameScene extends Phaser.Scene {
           const gone = this.state.players.filter((p) => !ids.has(p.id) && !p.id.startsWith("bot-") && p.id !== "dummy" && p.lives > 0);
           for (const p of gone) {
             this.state = { ...this.state, players: this.state.players.map((q) => (q.id === p.id ? { ...q, lives: 0, respawn: Infinity } : q)) };
-            this.showBanner(`${p.name} が退出しました`);
+            this.notify(`${p.name} が退出しました`);
           }
         }),
       );
@@ -166,46 +191,64 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.setZoom(1);
       this.offs.forEach((f) => f());
       this.offs = [];
+      this.closeMenu();
       this.names.forEach((t) => t.destroy());
       this.names.clear();
     });
   }
 
-  /** ESCメニューの構築（最初は非表示） */
-  private buildMenu(): void {
+  /**
+   * ESCメニュー（裁定19）。
+   * 「非表示にするだけ」だと Phaser では隠れたボタンが入力を拾い続けることがあるため、
+   * 開くたびに生成し、閉じるたびに完全に破棄する。
+   */
+  private openMenu(): void {
+    if (this.menuOpen) return;
     const solo = session.mode === "solo";
     const items: Array<[string, () => void]> = solo
       ? [
-          ["リセット", () => { this.resetPractice(); this.toggleMenu(); }],
-          ["ゲージ全快", () => { this.refillGauges(); this.toggleMenu(); }],
-          ["キー設定", () => this.openSettings()],
-          ["閉じる", () => this.toggleMenu()],
-          ["訓練場から退出", () => this.scene.start("title")],
+          ["リセット", () => { this.closeMenu(); this.resetPractice(); }],
+          ["ゲージ全快", () => { this.closeMenu(); this.refillGauges(); }],
+          ["キー設定", () => { this.closeMenu(); this.openSettings(); }],
+          ["対戦に戻る", () => this.closeMenu()],
+          ["ホームに戻る", () => { this.closeMenu(); this.scene.start("title"); }],
         ]
       : [
           // 対戦中はシーンを離れると同期が切れるため、キー設定はタイトルからのみ
-          ["閉じる", () => this.toggleMenu()],
-          ["マッチから退出", () => this.leave("マッチから退出しました")],
+          ["対戦に戻る", () => this.closeMenu()],
+          ["ホームに戻る", () => { this.closeMenu(); this.leave("マッチから退出しました"); }],
         ];
 
-    const h = 62 * items.length + 40;
-    const bg = this.add.graphics();
+    const h = 62 * items.length + 56;
+    const top = F.height / 2 - h / 2;
+    const bg = this.add.graphics().setDepth(9000);
     bg.fillStyle(0x000000, 0.72).fillRect(0, 0, F.width, F.height);
     bg.lineStyle(2, 0x22d3ee, 1).fillStyle(0x0a1420, 0.97);
-    bg.fillRoundedRect(F.width / 2 - 180, F.height / 2 - h / 2, 360, h, 14);
-    bg.strokeRoundedRect(F.width / 2 - 180, F.height / 2 - h / 2, 360, h, 14);
+    bg.fillRoundedRect(F.width / 2 - 180, top, 360, h, 14);
+    bg.strokeRoundedRect(F.width / 2 - 180, top, 360, h, 14);
+    // 背面クリックが下のゲームへ抜けないよう全面で受け止める
+    const blocker = this.add.zone(F.width / 2, F.height / 2, F.width, F.height).setInteractive().setDepth(9000);
+    const hint = label(this, F.width / 2, top + 24, "ESC でメニューを閉じる", 13, "#64748b").setDepth(9002);
+    this.menuObjects = [bg, blocker, hint];
 
-    this.menu = this.add.container(0, 0, [bg]);
     items.forEach(([text, fn], i) => {
-      const b = button(this, F.width / 2, F.height / 2 - h / 2 + 50 + i * 62, text, fn, 300, 48);
-      this.menu.add(b.container);
+      const b = button(this, F.width / 2, top + 56 + i * 62, text, fn, 300, 48);
+      b.container.setDepth(9001);
+      this.menuObjects.push(b.container);
     });
-    this.menu.setDepth(9000).setVisible(false);
+    this.menuOpen = true;
+  }
+
+  private closeMenu(): void {
+    if (!this.menuOpen) return;
+    for (const o of this.menuObjects) o.destroy();
+    this.menuObjects = [];
+    this.menuOpen = false;
   }
 
   private toggleMenu(): void {
-    this.menuOpen = !this.menuOpen;
-    this.menu.setVisible(this.menuOpen);
+    if (this.menuOpen) this.closeMenu();
+    else this.openMenu();
   }
 
   private openSettings(): void {
@@ -227,7 +270,7 @@ export class GameScene extends Phaser.Scene {
     this.predicted = null;
     this.combo = 0;
     this.latch = { skill1: false, skill2: false, skill3: false };
-    this.showBanner("リセット");
+    this.notify("リセット", "#67e8f9");
   }
 
   /** ゲージだけ満タンにする（コンボ・合体技の反復練習用） */
@@ -239,7 +282,7 @@ export class GameScene extends Phaser.Scene {
     me.guardGauge = BALANCE.guard.max;
     me.skillCd = [0, 0, 0];
     me.skillLock = [0, 0, 0];
-    this.showBanner("ゲージ全快");
+    this.notify("ゲージ全快", "#67e8f9");
   }
 
   private leave(message: string): void {
@@ -257,7 +300,7 @@ export class GameScene extends Phaser.Scene {
         const avg = this.lagWindow.reduce((a, b) => a + b, 0) / this.lagWindow.length;
         if (avg > 40) {
           this.lowSpec = true; // 演出を落として処理を守る（bot削減より先の逃げ道）
-          this.showBanner("処理落ち検知：演出を簡略化");
+          this.notify("処理落ち検知：演出を簡略化", "#94a3b8");
         }
       }
     }
@@ -384,6 +427,12 @@ export class GameScene extends Phaser.Scene {
       // 裁定10: 左クリック=主武器 / 右クリック=副武器
       fire: ptr.leftButtonDown(),
       fire2: ptr.rightButtonDown(),
+      // ビルドウォールの設置位置（裁定21）
+      aimDist: me ? Math.hypot(ptr.worldX - me.x, ptr.worldY - me.y) : 0,
+      skill1Held: this.bindDown(this.keys.skill1),
+      skill2Held: this.bindDown(this.keys.skill2),
+      // バレットプルーフ（裁定26）: カーソルに一番近い味方を自動選択
+      aimAllyId: this.nearestAlly(ptr.worldX, ptr.worldY),
       guard: this.bindDown(this.keys.guard),
       skill1: this.latch.skill1,
       skill2: this.latch.skill2,
@@ -391,6 +440,154 @@ export class GameScene extends Phaser.Scene {
     };
     if (consume) this.latch = { skill1: false, skill2: false, skill3: false };
     return input;
+  }
+
+  /** カーソルに最も近い味方（自分を除く）。乱闘など味方がいなければ null */
+  private nearestAlly(x: number, y: number): PlayerId | null {
+    const me = this.stateFor(this.me);
+    if (!me) return null;
+    let best: PlayerId | null = null;
+    let bestD = Infinity;
+    for (const p of this.state.players) {
+      if (p.id === me.id || p.team !== me.team || !isAlive(p)) continue;
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d < bestD) { bestD = d; best = p.id; }
+    }
+    return best;
+  }
+
+  /** ソニックの残像（裁定24）: 経路線＋等間隔のシルエット＋始点リング */
+  private sonicTrail(fromX: number, fromY: number, toX: number, toY: number, color: number): void {
+    if (this.lowSpec) return;
+    const line = this.add.graphics().setDepth(4);
+    line.lineStyle(2, color, 0.55);
+    line.lineBetween(fromX, fromY, toX, toY);
+    line.lineStyle(3, color, 0.5);
+    line.strokeCircle(fromX, fromY, P.radius);
+    this.tweens.add({ targets: line, alpha: 0, duration: 260, onComplete: () => line.destroy() });
+
+    const N = 5;
+    for (let i = 0; i < N; i++) {
+      const u = (i + 1) / (N + 1);
+      const gx = fromX + (toX - fromX) * u;
+      const gy = fromY + (toY - fromY) * u;
+      const ghost = this.add.graphics().setDepth(4);
+      ghost.fillStyle(color, 0.16 + 0.12 * u); // 手前ほど薄い
+      ghost.fillCircle(gx, gy, P.radius);
+      this.tweens.add({ targets: ghost, alpha: 0, duration: 250, delay: i * 18, onComplete: () => ghost.destroy() });
+    }
+    // 始点の衝撃波
+    const ring = this.add.graphics().setDepth(4);
+    ring.lineStyle(3, color, 0.9);
+    ring.strokeCircle(fromX, fromY, P.radius);
+    this.tweens.add({ targets: ring, alpha: 0, scaleX: 2.2, scaleY: 2.2, duration: 300, onComplete: () => ring.destroy() });
+    ring.setPosition(0, 0);
+  }
+
+  /**
+   * スキルリンク（裁定28）の広がり演出。
+   * 着弾点(ox,oy)を起点に、スラム範囲(x,y,radius)へ一瞬で駆け抜ける。
+   * ライトニングスラム=水色の感電 / ヒールスラム=緑の回復。
+   */
+  private slamLinkBurst(pair: "slamStun" | "slamPotion", ox: number, oy: number, x: number, y: number, radius: number): void {
+    const color = pair === "slamStun" ? 0x7dd3fc : 0x4ade80;
+    // 着弾点からスラム中心へ走る線
+    const bolt = this.add.graphics().setDepth(6);
+    bolt.lineStyle(4, color, 0.95);
+    if (pair === "slamStun") {
+      // ジグザグで感電らしく
+      const steps = 6;
+      let px = ox, py = oy;
+      bolt.beginPath();
+      bolt.moveTo(ox, oy);
+      for (let i = 1; i <= steps; i++) {
+        const u = i / steps;
+        const jitter = i === steps ? 0 : (Math.random() - 0.5) * 26;
+        px = ox + (x - ox) * u - (y - oy) / (Math.hypot(x - ox, y - oy) || 1) * jitter;
+        py = oy + (y - oy) * u + (x - ox) / (Math.hypot(x - ox, y - oy) || 1) * jitter;
+        bolt.lineTo(px, py);
+      }
+      bolt.strokePath();
+    } else {
+      bolt.lineBetween(ox, oy, x, y);
+    }
+    this.tweens.add({ targets: bolt, alpha: 0, duration: 320, onComplete: () => bolt.destroy() });
+
+    // スラム範囲に一瞬で広がるリング
+    const ring = this.add.graphics().setDepth(6);
+    ring.lineStyle(5, color, 0.9);
+    ring.strokeCircle(x, y, radius);
+    ring.fillStyle(color, 0.14);
+    ring.fillCircle(x, y, radius);
+    ring.setScale(0.15);
+    ring.setPosition(x - x * 0.15, y - y * 0.15);
+    this.tweens.add({
+      targets: ring,
+      scaleX: 1, scaleY: 1, x: 0, y: 0,
+      duration: 180,
+      ease: "Cubic.easeOut",
+      onComplete: () => {
+        this.tweens.add({ targets: ring, alpha: 0, duration: 260, onComplete: () => ring.destroy() });
+      },
+    });
+    SFX.center();
+  }
+
+  /**
+   * スキルリンク成立の演出（裁定30）。
+   * 2色のリングが交差して弾ける＋中心のフラッシュ＋放射スパーク。
+   * 中央にテキストを出さず、起きた場所で見せる。
+   */
+  private linkBurst(x: number, y: number, pair: string): void {
+    const pal: Record<string, [number, number]> = {
+      breach: [0x22e5ff, 0xfb923c],
+      lightning: [0x7dd3fc, 0xe879f9],
+      slamStun: [0x7dd3fc, 0xfb923c],
+      slamPotion: [0x4ade80, 0xfb923c],
+    };
+    const [c1, c2] = pal[pair] ?? [0x22e5ff, 0xfb923c];
+
+    // 中心のフラッシュ
+    const flash = this.add.circle(x, y, 26, 0xffffff).setBlendMode(Phaser.BlendModes.ADD).setDepth(7);
+    this.tweens.add({ targets: flash, scale: 2.6, alpha: 0, duration: 260, ease: "Cubic.easeOut", onComplete: () => flash.destroy() });
+
+    // 2色のリングが時間差で広がる
+    [c1, c2].forEach((c, i) => {
+      const ring = this.add.circle(x, y, 20).setStrokeStyle(4, c, 1).setBlendMode(Phaser.BlendModes.ADD).setDepth(7);
+      this.tweens.add({
+        targets: ring,
+        scale: 5.5,
+        alpha: 0,
+        delay: i * 70,
+        duration: 520,
+        ease: "Cubic.easeOut",
+        onComplete: () => ring.destroy(),
+      });
+    });
+
+    if (this.lowSpec) return;
+    // 放射スパーク（2色を交互に）
+    const n = 18;
+    for (let i = 0; i < n; i++) {
+      const a = (Math.PI * 2 * i) / n + Math.random() * 0.2;
+      const dist = 90 + Math.random() * 70;
+      const dot = this.add.circle(x, y, 3 + Math.random() * 2, i % 2 === 0 ? c1 : c2).setBlendMode(Phaser.BlendModes.ADD).setDepth(7);
+      this.tweens.add({
+        targets: dot,
+        x: x + Math.cos(a) * dist,
+        y: y + Math.sin(a) * dist,
+        alpha: 0,
+        duration: 520 + Math.random() * 260,
+        ease: "Cubic.easeOut",
+        onComplete: () => dot.destroy(),
+      });
+    }
+    this.shake = Math.max(this.shake, 5);
+  }
+
+  private colorOf(id: PlayerId): number {
+    const p = this.stateFor(id);
+    return p && p.id === this.me ? 0x67e8f9 : 0xf472b6;
   }
 
   private stateFor(id: PlayerId): PlayerState | undefined {
@@ -421,6 +618,12 @@ export class GameScene extends Phaser.Scene {
     if (this.isHost && session.mode === "online") this.pendingEvents.push(...events);
     for (const e of events) {
       switch (e.type) {
+        case "countdown": {
+          SFX.shoot(); // 短いビープ代わり
+          this.countText.setScale(1.6).setAlpha(1);
+          this.tweens.add({ targets: this.countText, scale: 1, duration: 220, ease: "Cubic.easeOut" });
+          break;
+        }
         case "shoot": {
           if (e.owner === this.me) SFX.shoot();
           if (!this.lowSpec) {
@@ -483,20 +686,21 @@ export class GameScene extends Phaser.Scene {
           if (e.from === this.me || e.target === this.me) SFX.heal();
           break;
         case "link": {
-          const names: Record<string, string> = { breach: "ブリーチ", echoWall: "エコーウォール", mistSignal: "ミストシグナル" };
-          this.showBanner(`LINK! ${names[e.pair] ?? ""}`);
+          // 裁定30: 中央のテキストは出さず、現場のエフェクトだけで見せる
           SFX.link();
-          // 2人の色が混ざるエフェクト（簡易: 2色スパーク）
-          for (let i = 0; i < (this.lowSpec ? 6 : 14); i++) {
-            const a = (Math.PI * 2 * i) / 14;
-            const c = i % 2 === 0 ? 0x22e5ff : 0xfb923c;
-            const dot = this.add.circle(e.x, e.y, 4, c).setBlendMode(Phaser.BlendModes.ADD);
-            this.tweens.add({ targets: dot, x: e.x + Math.cos(a) * 120, y: e.y + Math.sin(a) * 120, alpha: 0, duration: 700, onComplete: () => dot.destroy() });
-          }
+          this.linkBurst(e.x, e.y, e.pair);
+          break;
+        }
+        case "slamLink": {
+          this.slamLinkBurst(e.pair, e.ox, e.oy, e.x, e.y, e.radius);
+          break;
+        }
+        case "sonic": {
+          this.sonicTrail(e.fromX, e.fromY, e.x, e.y, this.colorOf(e.owner));
           break;
         }
         case "erase":
-          this.popText(this.pos(e.owner).x, this.pos(e.owner).y - 44, "弾消し!", "#67e8f9", false);
+          SFX.deflect(); // 裁定25: 表示は出さず、軽快な「シャキン」だけ
           break;
         case "justGuard":
           this.popText(this.pos(e.target).x, this.pos(e.target).y - 44, "JUST!", "#67e8f9", true);
@@ -519,7 +723,7 @@ export class GameScene extends Phaser.Scene {
           const meP = this.stateFor(this.me);
           const tgt = this.stateFor(e.target);
           if (this.state.mode === "teams" && meP && tgt && tgt.team === meP.team && e.target !== this.me) {
-            this.showBanner("味方ダウン！CD半減中");
+            this.notify("味方ダウン！CD半減中");
             SFX.allyDown();
           }
           break;
@@ -565,6 +769,13 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** 左上の小さな通知（裁定29）。ゲーム進行を邪魔しない情報はこちらに出す */
+  private notify(text: string, color = "#fbbf24"): void {
+    this.notice.setText(text).setColor(color).setAlpha(1);
+    this.tweens.killTweensOf(this.notice);
+    this.tweens.add({ targets: this.notice, alpha: 0, delay: 1600, duration: 500 });
+  }
+
   private showBanner(text: string): void {
     this.banner.setText(text).setAlpha(1);
     this.tweens.killTweensOf(this.banner);
@@ -589,13 +800,37 @@ export class GameScene extends Phaser.Scene {
     } else this.cameras.main.setScroll(0, 0);
 
     // 生成物
+    // ビルドウォール（裁定31）: 厚みのある構造物として描く
     for (const w of to.walls) {
       const ratio = w.hp / BALANCE.heavySkills.wall.hp;
-      const base = w.echo ? 0xa3e635 : w.breach ? 0x22e5ff : 0xfb923c;
-      g.lineStyle(BALANCE.heavySkills.wall.thickness, base, 0.35 + 0.5 * ratio);
+      const base = w.breach ? 0x22e5ff : 0xfb923c;
+      const th = BALANCE.heavySkills.wall.thickness;
+      // 外周のグロー
+      g.lineStyle(th + 6, base, 0.14);
       g.lineBetween(w.x1, w.y1, w.x2, w.y2);
-      g.lineStyle(2, 0xffffff, w.breach ? 0.5 : 0.9);
+      // 本体（耐久が減るほど暗くなる）
+      g.lineStyle(th, base, 0.4 + 0.5 * ratio);
       g.lineBetween(w.x1, w.y1, w.x2, w.y2);
+      // 立体感: 上辺を明るく、下辺を暗く
+      const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / len) * (th / 2 - 1.5);
+      const ny = (dx / len) * (th / 2 - 1.5);
+      g.lineStyle(2, 0xffffff, 0.55 * ratio + 0.15);
+      g.lineBetween(w.x1 + nx, w.y1 + ny, w.x2 + nx, w.y2 + ny);
+      g.lineStyle(2, 0x000000, 0.35);
+      g.lineBetween(w.x1 - nx, w.y1 - ny, w.x2 - nx, w.y2 - ny);
+      // 耐久を示すリベット（等間隔の点）
+      const rivets = 4;
+      g.fillStyle(0xffffff, 0.25 + 0.45 * ratio);
+      for (let i = 0; i < rivets; i++) {
+        const u = (i + 0.5) / rivets;
+        g.fillCircle(w.x1 + dx * u, w.y1 + dy * u, 2.2);
+      }
+      // 端のキャップ
+      g.fillStyle(base, 0.5 + 0.4 * ratio);
+      g.fillCircle(w.x1, w.y1, th / 2);
+      g.fillCircle(w.x2, w.y2, th / 2);
     }
     for (const s of to.smokes) {
       g.fillStyle(0x64748b, 0.55);
@@ -624,6 +859,14 @@ export class GameScene extends Phaser.Scene {
     for (const b of to.bullets) {
       const fb = fromBullets.get(b.id) ?? b;
       this.drawBullet(g, b, Phaser.Math.Linear(fb.x, b.x, alpha), Phaser.Math.Linear(fb.y, b.y, alpha));
+    }
+
+    // 開始カウントダウン（裁定16）
+    if (to.countdown > 0) {
+      this.countText.setText(String(Math.ceil(to.countdown))).setVisible(true).setAlpha(1);
+    } else if (this.countText.visible) {
+      this.countText.setText("START").setScale(1);
+      this.tweens.add({ targets: this.countText, alpha: 0, scale: 1.5, duration: 500, onComplete: () => this.countText.setVisible(false) });
     }
 
     // HUD
@@ -658,13 +901,24 @@ export class GameScene extends Phaser.Scene {
       const skillText = labels
         .map((l, i) => {
           const cd = me.skillCd[i]!;
-          const key = ["E", "R", "F"][i];
+          const key = [this.bindNames.skill1, this.bindNames.skill2, this.bindNames.skill3][i];
           return cd > 0 ? `[${key}] ${l} (${cd.toFixed(1)})` : `[${key}] ${l}`;
         })
         .join("   ");
-      const wname = WEAPON_LABEL[WEAPONS[me.cls][me.weapon] ?? ""] ?? "";
+      // 裁定10: 武器切替は廃止。左右どちらのクリックで何が出るかを常時表示する
+      const wMain = me.cls === "support" ? "狙撃(溜め)/ヒール(単押し)" : WEAPON_LABEL[WEAPONS[me.cls][0] ?? ""] ?? "";
+      const wSub = WEAPON_LABEL[WEAPONS[me.cls][1] ?? ""] ?? "";
+      // 残弾（裁定22）: 弾を使う武器を持つクラスのみ左下に表示
+      const magMax = me.cls === "heavy" ? BALANCE.hmg.magazine : BALANCE.pistol.magazine;
+      if (me.cls === "support") {
+        this.ammoText.setText("");
+      } else if (me.reload > 0) {
+        this.ammoText.setText(`リロード中 ${me.reload.toFixed(1)}s`).setColor("#f87171");
+      } else {
+        this.ammoText.setText(`残弾 ${me.magazine} / ${magMax}`).setColor(me.magazine <= magMax * 0.25 ? "#fb923c" : "#fef08a");
+      }
       const gauge = me.cls === "speed" ? `逃げ ${Math.floor(me.escapeGauge)}` : me.cls === "heavy" ? `統合 ${Math.floor(me.unifiedGauge)}` : "";
-      this.skillHud.setText(`武器: ${wname}（Q/右クリックで切替）   ${skillText}   ${gauge}`);
+      this.skillHud.setText(`左 ${wMain} / 右 ${wSub}   [${this.bindNames.guard}] 防御   ${skillText}   ${gauge}`);
     }
   }
 
@@ -742,6 +996,32 @@ export class GameScene extends Phaser.Scene {
         g.lineBetween(x, y, x + Math.cos(trail) * (m.reach + r) * 0.92, y + Math.sin(trail) * (m.reach + r) * 0.92);
       }
     }
+    // グラウンドスラムの溜め（裁定21）: 範囲は敵にも見える。円が縮んで着弾を予告する
+    if (p.slamT > 0) {
+      const R = BALANCE.heavySkills.slam;
+      const u = 1 - p.slamT / R.windupSeconds; // 0→1
+      g.fillStyle(0xfb923c, 0.08);
+      g.fillCircle(x, y, R.radius);
+      g.lineStyle(2, 0xfb923c, 0.5);
+      g.strokeCircle(x, y, R.radius);
+      g.lineStyle(4, 0xfb923c, 0.95);
+      g.strokeCircle(x, y, R.radius * (1 - u));
+    }
+    // ビルドウォールの構え（裁定21）: 設置予定位置にプレビューを出す
+    if (p.wallAiming) {
+      const W = BALANCE.heavySkills.wall;
+      const maxD = W.placeMaxPlayers * P.radius * 2;
+      const d = p.id === this.me ? Math.min(Math.hypot(this.input.activePointer.worldX - x, this.input.activePointer.worldY - y), maxD) : maxD;
+      const cx = x + Math.cos(p.aim) * d;
+      const cy = y + Math.sin(p.aim) * d;
+      const half = (W.lengthPlayers * P.radius * 2) / 2;
+      const nx = Math.cos(p.aim + Math.PI / 2);
+      const ny = Math.sin(p.aim + Math.PI / 2);
+      g.lineStyle(1, 0xfb923c, 0.3);
+      g.lineBetween(x, y, cx, cy);
+      g.lineStyle(W.thickness, 0xfb923c, 0.45);
+      g.lineBetween(cx - nx * half, cy - ny * half, cx + nx * half, cy + ny * half);
+    }
     if (p.chargeT > 0) {
       // 溜め発光（溜め量に比例）
       const u = Math.min(1, p.chargeT / BALANCE.sniper.chargeMax);
@@ -797,6 +1077,27 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawBullet(g: Phaser.GameObjects.Graphics, b: BulletState, x: number, y: number): void {
+    // フラスコ（裁定26）: 回転しながら飛ぶ。水色=バレットプルーフ / 緑=ポーション
+    if (b.kind === "bell" || b.kind === "potion") {
+      const isBell = b.kind === "bell";
+      const col = isBell ? 0x67e8f9 : 0x4ade80;
+      const spin = this.time.now / (isBell ? 40 : 90); // 速い弾ほど速く回る
+      const r = b.radius;
+      g.fillStyle(col, 0.25);
+      g.fillCircle(x, y, r + 4);
+      g.fillStyle(col, 1);
+      g.fillCircle(x, y, r);
+      g.lineStyle(2, 0xffffff, 0.9);
+      g.strokeCircle(x, y, r);
+      // 首（回転を見せる棒）
+      const nx = Math.cos(spin) * (r + 5);
+      const ny = Math.sin(spin) * (r + 5);
+      g.lineStyle(4, 0xffffff, 0.95);
+      g.lineBetween(x, y, x + nx, y + ny);
+      g.lineStyle(2, col, 1);
+      g.lineBetween(x, y, x + nx, y + ny);
+      return;
+    }
     const color = b.kind === "heal" ? 0x4ade80 : b.kind === "stun" ? 0xe879f9 : b.kind === "sniper" ? 0xa3e635 : b.kind === "hmg" ? 0xfdba74 : COLORS.bullet;
     const len = b.kind === "heal" ? 8 : 16;
     const s = Math.hypot(b.vx, b.vy) || 1;

@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { BALANCE } from "../src/balance";
 import { botInput, createBotMemory } from "../src/sim/bot";
-import { createMatch, isAlive, step } from "../src/sim/step";
+import { createMatch as createMatchRaw, isAlive, step } from "../src/sim/step";
 import type { PlayerInput, SimEvent, SimState } from "../src/sim/types";
 import { NULL_INPUT } from "../src/sim/types";
+
+/** テストは開始カウントダウン（裁定16）をスキップして本編だけを検証する */
+const createMatch: typeof createMatchRaw = (...args) => {
+  const s = createMatchRaw(...args);
+  s.countdown = 0;
+  return s;
+};
+
 
 const DT = 1 / BALANCE.tickRate;
 

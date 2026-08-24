@@ -144,6 +144,11 @@ export const SFX = {
     thump(220, 60, 0.14, 0.18);
     tone(1760, 0.09, "sine", 0.05, 0.01);
   },
+  /** 刀の弾弾き: 短く軽快な金属音（裁定25） */
+  deflect(): void {
+    noise(0.035, 0.07, 7000, "highpass");
+    tone(2600, 0.06, "triangle", 0.05, 0, 1400);
+  },
   guard(): void {
     noise(0.05, 0.06, 5000, "highpass"); // 金属質のカキン
     tone(1500, 0.05, "square", 0.03, 0, 900);

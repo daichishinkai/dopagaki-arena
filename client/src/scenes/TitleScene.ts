@@ -86,7 +86,7 @@ export class TitleScene extends Phaser.Scene {
     // ---- 右パネル: トレーニング ----
     panel(this, 950, 385, 480, 350, "トレーニング");
 
-    const CLASS_NAME = { speed: "スピード型", heavy: "重量型", support: "支援型" } as const;
+    const CLASS_NAME = { speed: "スピード型", heavy: "タンク", support: "支援型" } as const;
     const order = ["speed", "heavy", "support"] as const;
     const clsBtn = button(this, 950, 300, `キャラ: ${CLASS_NAME[session.myCls]}`, () => {
       const i = order.indexOf(session.myCls);

@@ -4,7 +4,7 @@ import type { GameMessage } from "@pvp/shared";
 import { session } from "../session";
 import { button, label, title } from "../ui";
 
-const CLASS_NAME: Record<CharClass, string> = { speed: "スピード型", heavy: "重量型", support: "支援型" };
+const CLASS_NAME: Record<CharClass, string> = { speed: "スピード型", heavy: "タンク", support: "支援型" };
 const CLASS_ORDER: CharClass[] = ["speed", "heavy", "support"];
 
 export class LobbyScene extends Phaser.Scene {

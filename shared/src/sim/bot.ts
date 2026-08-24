@@ -217,5 +217,11 @@ export function botInput(state: SimState, botId: PlayerId, level: BotLevel, mem:
   }
 
   const sk = skills(state, me, mem, level, rng);
-  return { mx, my, aim: mem.aim, fire, fire2, guard: false, ...sk };
+  // botはビルドウォールを「押しっぱなし」にせず、構えた次のtickで離して設置する（裁定21）
+  const skill2Held = me.wallAiming ? false : sk.skill2;
+  const aimDist = target ? dist(me, target) : 0;
+  // botはバレットプルーフを単押し（自分に使用）で扱う
+  const skill1Held = me.bellAiming ? false : sk.skill1;
+  const aimAllyId = mem.healAllyId ?? null;
+  return { mx, my, aim: mem.aim, fire, fire2, aimDist, skill1Held, skill2Held, aimAllyId, guard: false, ...sk };
 }
