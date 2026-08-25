@@ -1200,7 +1200,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       if (p.bellAiming) {
         p.bellHoldT += dt;
         const SB = BALANCE.supportSkills.bell;
-        if (input.fire2) {
+        if (input.fire2 || input.cancel) {
           p.bellAiming = false; // 右クリックでキャンセル（CDは消費しない）
         } else if (!input.skill1Held) {
           p.bellAiming = false;
@@ -1223,7 +1223,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       // ポーションの構え（裁定26）
       if (p.potionAiming) {
         const SP = BALANCE.supportSkills.areaHeal;
-        if (input.fire2) {
+        if (input.fire2 || input.cancel) {
           p.potionAiming = false;
         } else if (!input.skill2Held) {
           p.potionAiming = false;
@@ -1241,7 +1241,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
 
       // ビルドウォールの構え（裁定21）: 右クリックでキャンセル（ゲージは返らない）／離すと設置
       if (p.wallAiming) {
-        if (input.fire2) {
+        if (input.fire2 || input.cancel) {
           p.wallAiming = false;
           events.push({ type: "wallAim", owner: p.id, cancelled: true });
         } else if (!input.skill2Held) {

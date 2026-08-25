@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { BALANCE } from "@pvp/shared";
-import { session } from "../session";
+import { saveTouchPref, session } from "../session";
 import { button, FONT, label, panel, title } from "../ui";
 
 export class TitleScene extends Phaser.Scene {
@@ -136,6 +136,12 @@ export class TitleScene extends Phaser.Scene {
     });
 
     button(this, W - 130, 40, "キー設定", () => this.scene.start("settings"), 200, 44);
+    // 裁定40: 操作方式の切替（タッチ端末なら初期値がタッチ）
+    const ctlBtn = button(this, W - 350, 40, `操作: ${session.touch ? "タッチ" : "キーボード"}`, () => {
+      session.touch = !session.touch;
+      saveTouchPref(session.touch);
+      ctlBtn.setText(`操作: ${session.touch ? "タッチ" : "キーボード"}`);
+    }, 210, 44);
     label(this, W / 2, H - 22, "WASD 移動 / マウス 照準 / 左クリック 主武器 / 右クリック 副武器 / スペース 防御 / E・R・F スキル / ESC メニュー", 15, "#64748b");
   }
 

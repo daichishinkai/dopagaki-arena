@@ -23,6 +23,8 @@ export interface PlayerInput {
   skill1: boolean;
   skill2: boolean;
   skill3: boolean;
+  /** 構え中のキャンセル（裁定40: タッチ操作用。右クリックと同じ扱い） */
+  cancel?: boolean;
 }
 
 export const NULL_INPUT: PlayerInput = {

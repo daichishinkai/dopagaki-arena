@@ -3,6 +3,28 @@ import { NetClient } from "./net/NetClient";
 
 export type Mode = "solo" | "online";
 
+const TOUCH_KEY = "dopagaki-touch";
+/** 操作方式（裁定40）: 保存があればそれ、なければタッチ端末かどうかで自動判定 */
+export function loadTouchPref(): boolean {
+  try {
+    const v = localStorage.getItem(TOUCH_KEY);
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch {
+    // 読めなければ自動判定
+  }
+  const coarse = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+  const hasTouch = typeof navigator !== "undefined" && (navigator.maxTouchPoints ?? 0) > 0;
+  return Boolean(coarse && hasTouch);
+}
+export function saveTouchPref(v: boolean): void {
+  try {
+    localStorage.setItem(TOUCH_KEY, v ? "1" : "0");
+  } catch {
+    // 保存できなくても続行
+  }
+}
+
 /** シーンをまたいで共有する状態（描画やロジックは持たない） */
 export const session = {
   net: new NetClient(),
@@ -20,6 +42,8 @@ export const session = {
   /** リザルト称号用の試合統計 */
   lastStats: null as { linkCount: number; maxLinkDamage: number; players: { id: PlayerId; name: string; team: number; kills: number; deaths: number; damageDealt: number }[] } | null,
   relayUrl: (import.meta.env.VITE_RELAY_URL as string | undefined) ?? "ws://localhost:8080",
+  /** タッチ操作（裁定40）。タイトルで切替 */
+  touch: loadTouchPref(),
 };
 
 export const COLORS = {

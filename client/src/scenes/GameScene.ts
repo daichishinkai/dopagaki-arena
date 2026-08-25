@@ -24,6 +24,7 @@ import { bindShort, isMouseBind, loadBinds, mouseMaskOf, type BindAction } from 
 import { COLORS, session } from "../session";
 import { BGM, SFX } from "../sound";
 import { button, FONT, label } from "../ui";
+import { TouchControls, type TouchButtonId } from "../touch";
 
 const F = BALANCE.field;
 const P = BALANCE.player;
@@ -76,6 +77,10 @@ export class GameScene extends Phaser.Scene {
   private bindNames = { guard: "SPACE", skill1: "E", skill2: "R", skill3: "F" };
   /** 押した瞬間を保持しておく入力ラッチ（裁定11） */
   private latch = { skill1: false, skill2: false, skill3: false };
+  /** タッチ操作（裁定40）。session.touch のときだけ生成 */
+  private touch: TouchControls | null = null;
+  /** タッチ時の最後の照準角（敵がいないときの向き保持） */
+  private lastAim = 0;
   private menuOpen = false;
   private menuObjects: Phaser.GameObjects.GameObject[] = [];
   private combo = 0;
@@ -158,7 +163,22 @@ export class GameScene extends Phaser.Scene {
     this.menuObjects = [];
     this.menuOpen = false;
     this.input.keyboard!.on("keydown-ESC", () => this.toggleMenu());
-    label(this, F.width - 60, 20, "ESC メニュー", 13, "#475569");
+    this.touch?.destroy();
+    this.touch = null;
+    if (session.touch) {
+      // 裁定40: タッチ操作。ESCの代わりに右上のメニューボタン、下のキー案内は消してボタンに表示
+      this.touch = new TouchControls(this);
+      const mg = this.add.graphics().setDepth(8600).setScrollFactor(0);
+      mg.fillStyle(0x1e293b, 0.85).fillRoundedRect(F.width - 112, 8, 104, 34, 8);
+      mg.lineStyle(1, 0x475569, 1).strokeRoundedRect(F.width - 112, 8, 104, 34, 8);
+      label(this, F.width - 60, 25, "メニュー", 15, "#cbd5e1").setDepth(8601);
+      this.add.zone(F.width - 60, 25, 104, 34).setInteractive({ useHandCursor: true }).setDepth(8602).on("pointerdown", () => this.toggleMenu());
+      this.skillHud.setVisible(false);
+      const me0 = this.stateFor(this.me);
+      if (me0) this.applyTouchLabels(me0.cls);
+    } else {
+      label(this, F.width - 60, 20, "ESC メニュー", 13, "#475569");
+    }
     this.combo = 0;
     this.predicted = null;
     this.flashUntil.clear();
@@ -190,6 +210,8 @@ export class GameScene extends Phaser.Scene {
     }
     this.events.once("shutdown", () => {
       BGM.stop();
+      this.touch?.destroy();
+      this.touch = null;
       // 注意: この時点でカメラは既に破棄されている（cameras.main は undefined）。
       // ここで cameras に触ると例外で遷移が止まり「ホームに戻る」が効かなくなる
       this.offs.forEach((f) => f());
@@ -286,6 +308,7 @@ export class GameScene extends Phaser.Scene {
     session.myCls = next;
     session.players = session.players.map((p) => (p.id === this.me ? { ...p, cls: next } : p));
     this.resetPractice();
+    this.applyTouchLabels(next);
     this.notify(`キャラ変更: ${CLASS_LABEL[next]}`, "#67e8f9");
   }
 
@@ -326,6 +349,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
     this.pollEdges();
+    this.touch?.update(dt);
 
     if (this.isHost) {
       const scale = this.slowmo > 0 ? KILL_SLOWMO_SCALE : 1;
@@ -441,6 +465,11 @@ export class GameScene extends Phaser.Scene {
       this.latch = { skill1: false, skill2: false, skill3: false };
       return { ...NULL_INPUT, aim };
     }
+    if (this.touch) {
+      const input = this.readTouchInput(me);
+      if (consume) this.touch.consumeEdges();
+      return input;
+    }
     const input: PlayerInput = {
       mx: (this.bindDown(this.keys.right) ? 1 : 0) - (this.bindDown(this.keys.left) ? 1 : 0),
       my: (this.bindDown(this.keys.down) ? 1 : 0) - (this.bindDown(this.keys.up) ? 1 : 0),
@@ -461,6 +490,132 @@ export class GameScene extends Phaser.Scene {
     };
     if (consume) this.latch = { skill1: false, skill2: false, skill3: false };
     return input;
+  }
+
+  /**
+   * タッチ入力を PlayerInput に翻訳する（裁定40）。
+   * - 主武器/副武器/防御: 指が乗っている間 true（タップは最低1tick押した扱い）
+   * - 構え型スキル（タンクのウォール／サポートのバレットプルーフとポーション）: 押した瞬間にエッジ、離すまで Held
+   * - それ以外のスキル: 離した瞬間にエッジ（ドラッグした向きが照準になる）
+   * - 照準: ドラッグ中はその向き、なければ一番近い敵へオートエイム
+   */
+  private readTouchInput(me: PlayerState | undefined): PlayerInput {
+    const t = this.touch!;
+    const B = t.buttons;
+    const cls = me?.cls ?? "speed";
+    const isHold = (i: 0 | 1 | 2): boolean => (cls === "heavy" && i === 1) || (cls === "support" && i <= 1);
+    const ids: [TouchButtonId, TouchButtonId, TouchButtonId] = ["skill1", "skill2", "skill3"];
+
+    // 照準の決定: 離した瞬間の向き > ドラッグ中の向き > オートエイム > 直前の向き
+    const releasing = (["main", "sub", ...ids] as TouchButtonId[]).find((id) => B[id].released && B[id].releaseAiming);
+    const aimingId = t.aimingButton();
+    let aim: number;
+    let aimRatio = 0;
+    if (releasing) { aim = B[releasing].angle; aimRatio = B[releasing].ratio; }
+    else if (aimingId) { aim = B[aimingId].angle; aimRatio = B[aimingId].ratio; }
+    else aim = this.autoAim(me) ?? this.lastAim;
+    this.lastAim = aim;
+
+    // 構え型スキル2（ウォール／ポーション）の距離: ドラッグ量に比例。タップならウォールは中距離、ポーションは足元
+    const skill2Max = cls === "heavy" ? BALANCE.heavySkills.wall.placeMaxPlayers : BALANCE.supportSkills.areaHeal.throwMaxPlayers;
+    const skill2Dragging = aimingId === "skill2" || releasing === "skill2";
+    const aimDist = skill2Dragging
+      ? aimRatio * skill2Max * P.radius * 2
+      : cls === "heavy" ? Math.min(2.5, skill2Max) * P.radius * 2 : 0;
+
+    // バレットプルーフ（サポートのスキル1）は sim 側が「押した長さ」で単押し／長押しを分けるため、
+    // タッチでは「ドラッグに入った瞬間」に構え開始、「ドラッグせず離した」ときに1tickだけ押した扱いにして自分に使う
+    const isBell = (i: 0 | 1 | 2): boolean => cls === "support" && i === 0;
+    const edge = (i: 0 | 1 | 2): boolean => {
+      const b = B[ids[i]];
+      if (isBell(i)) return b.aimStart || (b.released && !b.everAimed);
+      return isHold(i) ? b.pressed : b.released && !b.cancelled;
+    };
+    const heldOf = (i: 0 | 1 | 2): boolean => {
+      const b = B[ids[i]];
+      if (isBell(i)) return b.held && b.everAimed;
+      return isHold(i) && b.held;
+    };
+    const cancel = ids.some((id) => B[id].released && B[id].cancelled);
+
+    // バレットプルーフの味方選択: ドラッグ方向に一番近い味方
+    const bellAiming = cls === "support" && (aimingId === "skill1" || releasing === "skill1");
+    const aimAllyId = bellAiming ? this.allyTowards(aim) : null;
+
+    // 近接（刀・ナイフ・ジャブ）は「離した瞬間に1回」（ドラッグで向きを決めてから振れる）。
+    // 射撃（ピストル・HMG・狙撃）は押している間（狙撃は溜め、離すと発射）
+    const mainMelee = cls === "speed";
+    const subMelee = cls !== "speed";
+    const fireOf = (id: "main" | "sub", melee: boolean): boolean =>
+      melee ? B[id].released && !B[id].cancelled : B[id].held || B[id].pressed;
+
+    return {
+      mx: t.stick.mx,
+      my: t.stick.my,
+      aim,
+      fire: fireOf("main", mainMelee),
+      fire2: fireOf("sub", subMelee),
+      aimDist,
+      skill1Held: heldOf(0),
+      skill2Held: heldOf(1),
+      aimAllyId,
+      guard: B.guard.held || B.guard.pressed,
+      skill1: edge(0),
+      skill2: edge(1),
+      skill3: edge(2),
+      cancel,
+    };
+  }
+
+  /** 自機の構えプレビュー距離: タッチならドラッグ量、マウスならカーソルまでの距離 */
+  private myAimDist(x: number, y: number, maxD: number): number {
+    if (this.touch) {
+      const id = this.touch.aimingButton();
+      if (id === "skill2") return this.touch.buttons.skill2.ratio * maxD;
+      const me = this.stateFor(this.me);
+      return me?.cls === "heavy" ? Math.min(2.5 * P.radius * 2, maxD) : 0;
+    }
+    return Math.min(Math.hypot(this.input.activePointer.worldX - x, this.input.activePointer.worldY - y), maxD);
+  }
+
+  /** 一番近い生きている敵への角度。敵がいなければ null */
+  private autoAim(me: PlayerState | undefined): number | null {
+    if (!me) return null;
+    let best: PlayerState | null = null;
+    let bestD = Infinity;
+    for (const p of this.state.players) {
+      if (p.id === me.id || p.team === me.team || !isAlive(p)) continue;
+      const d = Math.hypot(p.x - me.x, p.y - me.y);
+      if (d < bestD) { best = p; bestD = d; }
+    }
+    return best ? Math.atan2(best.y - me.y, best.x - me.x) : null;
+  }
+
+  /** 指定した向きに一番近い味方（自分を除く）。角度差で選ぶ */
+  private allyTowards(angle: number): PlayerId | null {
+    const me = this.stateFor(this.me);
+    if (!me) return null;
+    let best: PlayerId | null = null;
+    let bestDa = Infinity;
+    for (const p of this.state.players) {
+      if (p.id === me.id || p.team !== me.team || !isAlive(p)) continue;
+      const a = Math.atan2(p.y - me.y, p.x - me.x);
+      const da = Math.abs(Math.atan2(Math.sin(a - angle), Math.cos(a - angle)));
+      if (da < bestDa) { best = p.id; bestDa = da; }
+    }
+    return best;
+  }
+
+  /** タッチボタンの表示名（裁定40） */
+  private applyTouchLabels(cls: CharClass): void {
+    if (!this.touch) return;
+    const mainName = cls === "support" ? "狙撃\nヒール" : WEAPON_LABEL[WEAPONS[cls][0] ?? ""] ?? "";
+    const subName = WEAPON_LABEL[WEAPONS[cls][1] ?? ""] ?? "";
+    this.touch.setLabel("main", mainName);
+    this.touch.setLabel("sub", subName);
+    this.touch.setLabel("guard", "防御");
+    const labels = SKILL_LABEL[cls]!;
+    labels.forEach((l, i) => this.touch!.setLabel(["skill1", "skill2", "skill3"][i] as TouchButtonId, l.replace(/ \d+$/, "").replace("ビルドウォール", "ウォール").replace("バレットプルーフ", "プルーフ")));
   }
 
   /** カーソルに最も近い味方（自分を除く）。乱闘など味方がいなければ null */
@@ -1008,6 +1163,18 @@ export class GameScene extends Phaser.Scene {
       }
       const gauge = me.cls === "speed" ? `逃げ ${Math.floor(me.escapeGauge)}` : me.cls === "heavy" ? `統合 ${Math.floor(me.unifiedGauge)}` : "";
       this.skillHud.setText(`左 ${wMain} / 右 ${wSub}   [${this.bindNames.guard}] 防御   ${skillText}   ${gauge}`);
+      if (this.touch) {
+        // 裁定40: ボタンにCDとゲージ不足を反映
+        const cdMax = me.cls === "speed" ? [0, 0, BALANCE.speedSkills.overload.cooldown] : me.cls === "heavy" ? [0, 0, 0] : [BALANCE.supportSkills.bell.cooldown, BALANCE.supportSkills.areaHeal.cooldown, BALANCE.supportSkills.stun.cooldown];
+        const cost = me.cls === "speed" ? [BALANCE.speedSkills.dash.cost, BALANCE.speedSkills.smoke.cost, 0] : me.cls === "heavy" ? [BALANCE.heavySkills.slam.cost, BALANCE.heavySkills.wall.cost, BALANCE.heavySkills.cover.cost] : [0, 0, 0];
+        const gaugeNow = me.cls === "speed" ? me.escapeGauge : me.cls === "heavy" ? me.unifiedGauge : Infinity;
+        (["skill1", "skill2", "skill3"] as const).forEach((id, i) => {
+          const cd = me.skillCd[i]!;
+          const max = cdMax[i] ?? 0;
+          this.touch!.setCooldown(id, max > 0 ? cd / max : cd > 0 ? 1 : 0, gaugeNow < (cost[i] ?? 0));
+        });
+        this.touch.setCooldown("guard", 0, me.guardGauge <= 0);
+      }
     }
   }
 
@@ -1096,6 +1263,13 @@ export class GameScene extends Phaser.Scene {
       g.lineStyle(4, 0xfb923c, 0.95);
       g.strokeCircle(x, y, Math.max(P.radius, R.radius * u));
     }
+    // タッチ操作（裁定40）: 自機の向き（照準）を短い線で示す。ドラッグ中は太く長く
+    if (this.touch && p.id === this.me) {
+      const aimingId = this.touch.aimingButton();
+      const len = aimingId ? r + 46 : r + 22;
+      g.lineStyle(aimingId ? 4 : 2, 0xffffff, aimingId ? 0.9 : 0.4);
+      g.lineBetween(x + Math.cos(p.aim) * (r + 4), y + Math.sin(p.aim) * (r + 4), x + Math.cos(p.aim) * len, y + Math.sin(p.aim) * len);
+    }
     // バレットプルーフ中（裁定38）: 水色の六角シールドが取り囲む。残り時間で薄くなる
     if (p.bulletproofT > 0) {
       const S = BALANCE.supportSkills.bell;
@@ -1120,7 +1294,7 @@ export class GameScene extends Phaser.Scene {
     if (p.potionAiming) {
       const SP = BALANCE.supportSkills.areaHeal;
       const maxD = SP.throwMaxPlayers * P.radius * 2;
-      const d = p.id === this.me ? Math.min(Math.hypot(this.input.activePointer.worldX - x, this.input.activePointer.worldY - y), maxD) : maxD;
+      const d = p.id === this.me ? this.myAimDist(x, y, maxD) : maxD;
       const tx = Math.min(Math.max(P.radius, x + Math.cos(p.aim) * d), F.width - P.radius);
       const ty = Math.min(Math.max(P.radius, y + Math.sin(p.aim) * d), F.height - P.radius);
       g.lineStyle(1, 0x4ade80, 0.35);
@@ -1136,7 +1310,7 @@ export class GameScene extends Phaser.Scene {
     if (p.wallAiming) {
       const W = BALANCE.heavySkills.wall;
       const maxD = W.placeMaxPlayers * P.radius * 2;
-      const d = p.id === this.me ? Math.min(Math.hypot(this.input.activePointer.worldX - x, this.input.activePointer.worldY - y), maxD) : maxD;
+      const d = p.id === this.me ? this.myAimDist(x, y, maxD) : maxD;
       const cx = x + Math.cos(p.aim) * d;
       const cy = y + Math.sin(p.aim) * d;
       const half = (W.lengthPlayers * P.radius * 2) / 2;
