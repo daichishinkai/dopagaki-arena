@@ -57,7 +57,7 @@ describe("クラス基礎（SPEC 16章）", () => {
     // 裁定24: タンクと支援型は同速、スピード型だけ少し速い
     expect(moveSpeedOf("heavy")).toBeCloseTo(moveSpeedOf("support"));
     expect(moveSpeedOf("speed")).toBeGreaterThan(moveSpeedOf("support"));
-    expect(moveSpeedOf("support")).toBeCloseTo(1280 / BALANCE.classes.support.crossSeconds);
+    expect(moveSpeedOf("support")).toBeCloseTo((1280 / BALANCE.classes.support.crossSeconds) * BALANCE.moveSpeedMultiplier);
   });
   it("武器構成", () => {
     expect(WEAPONS.speed).toEqual(["saber", "pistol"]);
@@ -139,11 +139,13 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
     expect(r.state.players[0]!.x - x0).toBeCloseTo(1280 * BALANCE.speedSkills.dash.distanceRatio, 0);
     expect(r.state.players[0]!.escapeGauge).toBeLessThanOrEqual(100 - 35 + 1);
   });
-  it("スモーク: 逃げゲージ30・持続2秒", () => {
+  it("クラウド: 逃げゲージ30・持続は balance の秒数（裁定46: 4秒）", () => {
     const s = duel("speed", "support");
     const r = run(s, { a: { ...NULL_INPUT, skill2: true } }, DT * 2);
     expect(r.state.smokes).toHaveLength(1);
-    const r2 = run(r.state, {}, 2.1);
+    const mid = run(r.state, {}, BALANCE.speedSkills.smoke.seconds - 0.3);
+    expect(mid.state.smokes).toHaveLength(1); // まだ残っている
+    const r2 = run(mid.state, {}, 0.5);
     expect(r2.state.smokes).toHaveLength(0);
   });
 });

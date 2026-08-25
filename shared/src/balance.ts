@@ -23,6 +23,17 @@ export const BALANCE = {
   countdownSeconds: 3,
   matchSeconds: 120,
 
+  /** 裁定45: 全員の移動速度にかける倍率（1で元の値）。裁定46: 0.5 → さらに2/3 の 1/3 を試す */
+  moveSpeedMultiplier: 1 / 3,
+
+  /** 中央エリア（裁定45・teams のみ）: 生存人数で勝っているチームのゲージが溜まり、満タンで相手チームの残機-1 */
+  zone: {
+    widthRatio: 0.42,
+    heightRatio: 0.55,
+    /** 人数で勝っている状態を何秒続ければ1回制圧か（調整枠） */
+    captureSeconds: 8,
+  },
+
   /** 2vs2（SPEC 5.4 / 6.2） */
   teams: {
     sharedLives: 5,
@@ -122,7 +133,7 @@ export const BALANCE = {
     /** ソニック（旧・高速移動）。裁定24: 距離をキャラ0.8体分ぶん延長 */
     dash: { cost: 35, distanceRatio: ratio(0.12) + (0.8 * 24 * 2) / 1280 },
     /** クラウド（旧・スモーク）。裁定24: 中で動けるよう半径2倍 */
-    smoke: { cost: 30, radius: px(180), seconds: 2 },
+    smoke: { cost: 30, radius: px(180), seconds: 4 /* 裁定46: 2→4 */ },
     overload: { cooldown: 10, shots: 2, damageMultiplier: 3, expireSeconds: 4 },
   },
 
@@ -159,7 +170,7 @@ export const BALANCE = {
   heavySkills: {
     sameSkillLockSeconds: 0.8,
     /** 裁定21: 発動前に windupSeconds の溜め（範囲は敵にも見える） */
-    slam: { cost: 60, radius: px(150), staggerSeconds: 0.5, windupSeconds: 0.35 },
+    slam: { cost: 60, radius: px(150), staggerSeconds: 0.5, windupSeconds: 0.35, /** 裁定46: リンク受付枠をスタン時間から切り離して2倍に */ linkWindowSeconds: 1.0 },
     /** ビルドウォール（裁定21）: 長押しで構え、離した位置に設置。最大5キャラ分まで */
     wall: { cost: 70, lengthPlayers: 2.5, hp: 80, seconds: 6.5 /* 裁定34: 4.5→6.5 */, thickness: px(12 * 1.3), placeMaxPlayers: 5 },
     cover: { cost: 50, fallbackDashDistance: px(110), fallbackShellSeconds: 1, shellDamageCut: 0.6 },
@@ -208,14 +219,18 @@ export const BALANCE = {
     /** バレットプルーフ（旧・鈴／裁定26）: 単押し=自分／長押し=味方を選んで投擲（追尾・高速） */
     bell: { cooldown: 14, invulnSeconds: 0.75, tapSeconds: 0.15, bulletSpeed: px(1500), bulletRadius: px(9), homingRadPerSecond: 12 },
     /** ポーション（旧・範囲回復／裁定26）: 押す→離すでカーソル位置へ低速投擲。自分は3割回復 */
-    areaHeal: { cooldown: 10, radius: px(170), heal: 20, bulletSpeed: px(300), bulletRadius: px(11), selfRatio: 0.3, throwMaxPlayers: 16 /* 裁定38: 8→16 */ },
+    areaHeal: { cooldown: 10, radius: px(170), heal: 20, bulletSpeed: px(600) /* 裁定46: 300→600 */, bulletRadius: px(11), selfRatio: 0.3, throwMaxPlayers: 16 /* 裁定38: 8→16 */ },
     /** スタン弾。裁定27: 通常ヒットで「次の狙撃が即最大溜め」を獲得（粘着対策） */
     stun: { cooldown: 12, stunSeconds: 0.5, cdDelaySeconds: 2, bulletSpeed: px(1000), bulletRadius: px(7), snipeBoostSeconds: 6 },
   },
 
   /** 層2合体技（SPEC 7.2）: 0.5秒以内の相互発動＋距離が画面幅25%以内→0.3秒の構え→LINKボーナス */
   link: {
-    windowSeconds: 0.5,
+    /**
+     * 裁定47: 時間窓は廃止。相方のスキルは「先に出したもののオブジェクト（壁・クラウド・スタン弾）が残っている限り」成立する。
+     * ここに残す秒数は、残るオブジェクトを持たないスキル（ソニック）が先に出たときだけの猶予。
+     */
+    objectlessWindowSeconds: 0.5,
     maxDistanceRatio: ratio(0.25),
     stanceSeconds: 0.3,
     breach: { markBoostSeconds: 2, markBoostMultiplier: 2 },
@@ -243,11 +258,15 @@ export const BALANCE = {
 export type CharClass = keyof typeof BALANCE.classes;
 
 export function moveSpeedOf(cls: CharClass): number {
-  return BALANCE.field.width / BALANCE.classes[cls].crossSeconds;
+  return (BALANCE.field.width / BALANCE.classes[cls].crossSeconds) * BALANCE.moveSpeedMultiplier;
+}
+/** 実際に画面を横断するのにかかる秒数（倍率込み） */
+export function crossSecondsOf(cls: CharClass): number {
+  return BALANCE.classes[cls].crossSeconds / BALANCE.moveSpeedMultiplier;
 }
 export function shieldMaxOf(cls: CharClass): number {
   return BALANCE.classes[cls].shieldMax;
 }
 
 /** 後方互換（標準=支援型相当の横断1.5秒） */
-export const MOVE_SPEED = BALANCE.field.width / BALANCE.classes.support.crossSeconds;
+export const MOVE_SPEED = (BALANCE.field.width / BALANCE.classes.support.crossSeconds) * BALANCE.moveSpeedMultiplier;

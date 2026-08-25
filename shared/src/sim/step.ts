@@ -161,6 +161,17 @@ export function createMatch(
     phase: "playing",
     mode,
     teamLives,
+    // 裁定45: 中央エリアはチーム戦のみ（訓練場・乱闘には出さない）
+    zone:
+      mode === "teams" && options.practice !== true
+        ? {
+            x: BALANCE.field.width / 2,
+            y: BALANCE.field.height / 2,
+            w: BALANCE.field.width * BALANCE.zone.widthRatio,
+            h: BALANCE.field.height * BALANCE.zone.heightRatio,
+            gauge: {},
+          }
+        : null,
     timeLeft: BALANCE.matchSeconds,
     practice: options.practice === true,
     players: ps,
@@ -655,7 +666,7 @@ function detonateSlam(state: SimState, p: PlayerState, events: SimEvent[]): void
   });
   state.smokes = state.smokes.filter((sm) => !(sm.owner !== p.id && Math.hypot(sm.x - p.x, sm.y - p.y) <= S.slam.radius));
   // スキルリンク受付（裁定28）: のけぞりが切れるまでスタン弾／ポーションの着弾を待つ
-  state.slamZones.push({ owner: p.id, team: p.team, x: p.x, y: p.y, until: state.t + S.slam.staggerSeconds });
+  state.slamZones.push({ owner: p.id, team: p.team, x: p.x, y: p.y, until: state.t + S.slam.linkWindowSeconds });
 }
 
 /** スラム痕跡に投擲物が着弾したときのスキルリンク（裁定28）。成立したら true */
@@ -682,7 +693,7 @@ function trySlamLink(state: SimState, team: number, kind: "slamStun" | "slamPoti
   state.linkCount += 1;
   state.linkWindows.push({ until: state.t + BALANCE.link.damageWindowSeconds, owners, damage: 0 });
   events.push({ type: "slamLink", pair: kind, x: zone.x, y: zone.y, ox: x, oy: y, radius: R });
-  events.push({ type: "link", pair: kind, owners, x: zone.x, y: zone.y });
+  events.push({ type: "link", pair: kind, owners, team, x: zone.x, y: zone.y, object: null });
   return true;
 }
 
@@ -859,14 +870,38 @@ const LINK_DEFS: ReadonlyArray<{ pair: LinkPair; a: SkillRecord["kind"]; b: Skil
   { pair: "lightning", a: "smoke", b: "stun" },
 ];
 
+/**
+ * 裁定47: スキル記録が「まだ生きているか」と、その現在位置。
+ * 残るオブジェクトを持つもの（壁・クラウド・スタン弾）はオブジェクトが存在する限り有効で、位置はオブジェクト基準。
+ * 持たないもの（ソニック）は短い猶予の間だけ有効で、位置は使った瞬間の位置。
+ */
+function skillRecordAlive(state: SimState, r: SkillRecord): { x: number; y: number } | null {
+  if (r.kind === "wall" && r.refId !== null) {
+    const w = state.walls.find((w) => w.id === r.refId);
+    return w ? { x: (w.x1 + w.x2) / 2, y: (w.y1 + w.y2) / 2 } : null;
+  }
+  if (r.kind === "smoke" && r.refId !== null) {
+    const sm = state.smokes.find((sm) => sm.id === r.refId);
+    return sm ? { x: sm.x, y: sm.y } : null;
+  }
+  if ((r.kind === "stun" || r.kind === "areaHeal") && r.refId !== null) {
+    const b = state.bullets.find((b) => b.id === r.refId);
+    return b ? { x: b.x, y: b.y } : null;
+  }
+  return state.t - r.t <= BALANCE.link.objectlessWindowSeconds ? { x: r.x, y: r.y } : null;
+}
+
 function recordSkill(state: SimState, p: PlayerState, kind: SkillRecord["kind"], refId: number | null): void {
   const rec: SkillRecord = { owner: p.id, team: p.team, kind, t: state.t, x: p.x, y: p.y, refId };
-  // 相方（同チーム・別人・0.5秒以内・画面幅25%以内）を探す
+  // 相方（同チーム・別人・オブジェクトが残っている・画面幅25%以内）を探す（裁定47）
   const maxDist = F.width * BALANCE.link.maxDistanceRatio;
+  // 自分側の位置もオブジェクト基準にする（ウォールは離れた場所に置けるため）
+  const own = skillRecordAlive(state, rec) ?? { x: rec.x, y: rec.y };
   for (const other of state.recentSkills) {
     if (other.team !== p.team || other.owner === p.id) continue;
-    if (state.t - other.t > BALANCE.link.windowSeconds) continue;
-    if (Math.hypot(other.x - rec.x, other.y - rec.y) > maxDist) continue;
+    const at = skillRecordAlive(state, other);
+    if (!at) continue;
+    if (Math.hypot(at.x - own.x, at.y - own.y) > maxDist) continue;
     for (const def of LINK_DEFS) {
       const match =
         (rec.kind === def.a && other.kind === def.b) || (rec.kind === def.b && other.kind === def.a);
@@ -931,7 +966,11 @@ function applyPendingLinks(state: SimState, events: SimEvent[]): void {
       if (bullet) bullet.mist = true;
     }
     state.linkWindows.push({ until: state.t + BALANCE.link.damageWindowSeconds, owners: link.owners, damage: 0 });
-    events.push({ type: "link", pair: link.pair, owners: link.owners, x: at.x, y: at.y });
+    const object =
+      link.pair === "breach"
+        ? link.refA !== null ? { kind: "wall" as const, id: link.refA } : null
+        : link.refA !== null ? { kind: "smoke" as const, id: link.refA } : null;
+    events.push({ type: "link", pair: link.pair, owners: link.owners, team: link.team, x: at.x, y: at.y, object });
   }
   state.pendingLinks = remain;
 }
@@ -1048,6 +1087,48 @@ function respawnPlayer(state: SimState, p: PlayerState, events: SimEvent[]): voi
   events.push({ type: "respawn", target: p.id });
 }
 
+/**
+ * 中央エリア（裁定45）。生存者のうちエリア内にいる人数をチームごとに数え、
+ * 単独で最多のチームのゲージだけが溜まる（同数・無人なら誰も溜まらない）。
+ * 満タンになったら相手チームの残機を1つ削ってゲージを0に戻す。減衰はしない。
+ */
+function stepZone(state: SimState, dt: number, events: SimEvent[]): void {
+  const z = state.zone;
+  if (!z || state.practice || state.phase !== "playing") return;
+  const count: Record<number, number> = {};
+  for (const p of state.players) {
+    if (!isAlive(p)) continue;
+    if (Math.abs(p.x - z.x) > z.w / 2 || Math.abs(p.y - z.y) > z.h / 2) continue;
+    count[p.team] = (count[p.team] ?? 0) + 1;
+  }
+  const teams = Object.keys(state.teamLives).map(Number);
+  let leader: number | null = null;
+  let best = 0;
+  let tie = false;
+  for (const t of teams) {
+    const n = count[t] ?? 0;
+    if (n > best) {
+      best = n;
+      leader = t;
+      tie = false;
+    } else if (n === best && n > 0) {
+      tie = true;
+    }
+  }
+  if (leader === null || tie) return;
+  const g = (z.gauge[leader] ?? 0) + dt / BALANCE.zone.captureSeconds;
+  if (g < 1) {
+    z.gauge[leader] = g;
+    return;
+  }
+  z.gauge[leader] = 0;
+  for (const victim of teams) {
+    if (victim === leader) continue;
+    state.teamLives[victim] = (state.teamLives[victim] ?? 0) - 1;
+    events.push({ type: "zoneCapture", team: leader, victim, x: z.x, y: z.y });
+  }
+}
+
 function checkMatchEnd(state: SimState, events: SimEvent[]): void {
   if (state.players.length < 2) return;
   if (state.practice) return; // 訓練場（裁定35）: 試合終了なし
@@ -1104,6 +1185,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     recentSkills: [...prev.recentSkills],
     pendingLinks: [...prev.pendingLinks],
     linkWindows: prev.linkWindows.map((w) => ({ ...w })),
+    zone: prev.zone ? { ...prev.zone, gauge: { ...prev.zone.gauge } } : null,
   };
   const byId = new Map(state.players.map((p) => [p.id, p]));
 
@@ -1113,7 +1195,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
 
   // 層2: 構え0.3秒後のボーナス適用・古い記録の掃除
   applyPendingLinks(state, events);
-  state.recentSkills = state.recentSkills.filter((r) => state.t - r.t <= BALANCE.link.windowSeconds + 0.05);
+  state.recentSkills = state.recentSkills.filter((r) => skillRecordAlive(state, r) !== null); // 裁定47
   state.linkWindows = state.linkWindows.filter((w) => state.t <= w.until);
 
   for (const p of state.players) {
@@ -1505,6 +1587,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
   state.bullets = aliveBullets;
   state.walls = state.walls.filter((w) => w.hp > 0);
 
+  stepZone(state, dt, events);
   checkMatchEnd(state, events);
   return { state, events };
 }

@@ -228,6 +228,54 @@ describe("スキルリンク（SPEC 7.2）", () => {
     const enemy = r3.state.players.find((p) => p.id === "e1")!;
     expect(enemy.cc).toBeGreaterThan(0.05); // 弾道外でも炸裂スタンを受けた
   });
+
+  it("裁定47: ウォールが残っている限りソニックでブリーチが成立する（5秒後でも可）", () => {
+    const s = teamPair();
+    const hv = s.players.find((p) => p.cls === "heavy")!;
+    const sp = s.players.find((p) => p.id === "sp")!;
+    hv.x = 400; hv.y = 360; hv.aim = 0; hv.unifiedGauge = 100;
+    sp.x = 400; sp.y = 300; sp.aim = 0; sp.escapeGauge = 100;
+    // 壁を置いて5秒待つ（壁は6.5秒残る）。既存テストと同じ入力で設置する
+    const r1 = run(s, { hv: { ...NULL_INPUT, aim: 0, aimDist: 60, skill2: true } }, DT * 3);
+    expect(r1.state.walls).toHaveLength(1);
+    const r2 = run(r1.state, {}, 5.0);
+    expect(r2.state.walls).toHaveLength(1);
+    // ここでソニック
+    const r3 = run(r2.state, { sp: { ...NULL_INPUT, aim: 0, skill1: true } }, DT * 2);
+    const r4 = run(r3.state, {}, 0.5);
+    const linkEv = [...r3.events, ...r4.events].find((e) => e.type === "link");
+    expect(linkEv && linkEv.type === "link" && linkEv.pair).toBe("breach");
+    expect(r4.state.walls[0]!.breach).toBe(true);
+  });
+
+  it("裁定47: クラウドが消えた後のスタン弾はリンクしない", () => {
+    const s = teamPair();
+    const sp = s.players.find((p) => p.id === "sp")!;
+    const su = s.players.find((p) => p.id === "su")!;
+    sp.x = 600; sp.y = 360;
+    su.x = 600 - BALANCE.field.width * BALANCE.link.maxDistanceRatio * 0.8; su.y = 360; su.aim = 0;
+    const r0 = run(s, { sp: { ...NULL_INPUT, skill2: true } }, DT * 2);
+    const r1 = run(r0.state, {}, BALANCE.speedSkills.smoke.seconds + 0.3);
+    expect(r1.state.smokes).toHaveLength(0);
+    const r2 = run(r1.state, { su: { ...NULL_INPUT, aim: 0, skill3: true } }, DT * 2);
+    const r3 = run(r2.state, {}, 0.6);
+    expect([...r2.events, ...r3.events].some((e) => e.type === "link")).toBe(false);
+  });
+
+  it("裁定46: クラウドが残っていれば1.5秒あいても成立する", () => {
+    const s = teamPair();
+    const sp = s.players.find((p) => p.id === "sp")!;
+    const su = s.players.find((p) => p.id === "su")!;
+    sp.x = 600; sp.y = 360;
+    su.x = 600 - BALANCE.field.width * BALANCE.link.maxDistanceRatio * 0.8; su.y = 360; su.aim = 0;
+    const r0 = run(s, { sp: { ...NULL_INPUT, skill2: true } }, DT * 2);
+    const r1 = run(r0.state, {}, 1.5); // 1.5秒あける
+    expect(r1.state.smokes).toHaveLength(1); // クラウドはまだ残っている（4秒）
+    const r2 = run(r1.state, { su: { ...NULL_INPUT, aim: 0, skill3: true } }, DT * 2);
+    const r3 = run(r2.state, {}, 0.6);
+    const linkEv = [...r0.events, ...r1.events, ...r2.events, ...r3.events].find((e) => e.type === "link");
+    expect(linkEv && linkEv.type === "link" && linkEv.pair).toBe("lightning");
+  });
 });
 
 

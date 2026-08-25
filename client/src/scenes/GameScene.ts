@@ -70,6 +70,8 @@ export class GameScene extends Phaser.Scene {
   private countText!: Phaser.GameObjects.Text;
   private ammoText!: Phaser.GameObjects.Text;
   private notice!: Phaser.GameObjects.Text;
+  /** 裁定47: リンク成立で縁取りするオブジェクト。key="wall:3" / "smoke:5" / "slam:x,y" → {until, mine, radius} */
+  private linkedObjects = new Map<string, { until: number; mine: boolean; x: number; y: number; radius: number }>();
   private names = new Map<PlayerId, Phaser.GameObjects.Text>();
   private keys!: Record<BindAction, Bind>;
   private mouseEdges: Partial<Record<BindAction, boolean>> = {};
@@ -182,6 +184,7 @@ export class GameScene extends Phaser.Scene {
     this.combo = 0;
     this.predicted = null;
     this.flashUntil.clear();
+    this.linkedObjects.clear();
     this.hitFreeze = 0;
     this.input.mouse?.disableContextMenu();
     BGM.start();
@@ -755,6 +758,22 @@ export class GameScene extends Phaser.Scene {
    * 2色のリングが交差して弾ける＋中心のフラッシュ＋放射スパーク。
    * 中央にテキストを出さず、起きた場所で見せる。
    */
+  /** 裁定47: 縁取りの周りを回るきらめきの点（時間で位置がずれる） */
+  private linkSparks(g: Phaser.GameObjects.Graphics, cx: number, cy: number, r: number, col: number, a: number, now: number): void {
+    const n = 8;
+    for (let i = 0; i < n; i++) {
+      const ang = (i / n) * Math.PI * 2 + now / 500;
+      const rr = r + 6 * Math.sin(now / 120 + i);
+      const px = cx + Math.cos(ang) * rr;
+      const py = cy + Math.sin(ang) * rr;
+      const s = 2.2 + 1.2 * Math.sin(now / 80 + i * 1.7);
+      g.fillStyle(0xffffff, 0.9 * a);
+      g.fillCircle(px, py, s);
+      g.fillStyle(col, 0.5 * a);
+      g.fillCircle(px, py, s + 2.5);
+    }
+  }
+
   private linkBurst(x: number, y: number, pair: string): void {
     const pal: Record<string, [number, number]> = {
       breach: [0x22e5ff, 0xfb923c],
@@ -904,6 +923,17 @@ export class GameScene extends Phaser.Scene {
           this.popText(e.x, e.y - 30, `+${Math.round(e.amount)}`, "#4ade80", false);
           if (e.from === this.me || e.target === this.me) SFX.heal();
           break;
+        case "zoneCapture": {
+          // 裁定45: 制圧。自分のチームかどうかで文言と色を変える
+          const meState = this.state.players.find((q) => q.id === this.me);
+          const mine = meState?.team === e.team;
+          this.notify(mine ? "エリア制圧！ 敵の残機 -1" : "エリアを取られた！ 味方の残機 -1", mine ? "#60a5fa" : "#f87171");
+          this.popText(e.x, e.y - 20, mine ? "制圧" : "被制圧", mine ? "#93c5fd" : "#fca5a5", true);
+          if (!this.lowSpec) this.expandRing(e.x, e.y, 40, 6, mine ? COLORS.ally : COLORS.enemy, 6, 420);
+          SFX.kill(mine ? "mine" : "me");
+          this.shake = Math.max(this.shake, 6);
+          break;
+        }
         case "bulletproof": {
           // 裁定38: 発動の瞬間に水色のシールドが弾けて広がる＋専用音
           this.popText(e.x, e.y - 40, "PROOF", "#67e8f9", true);
@@ -923,8 +953,18 @@ export class GameScene extends Phaser.Scene {
         }
         case "link": {
           // 裁定30: 中央のテキストは出さず、現場のエフェクトだけで見せる
-          SFX.link();
+          // 裁定47: 味方は緑・敵はマゼンタの縁取り＋上昇／下降のキラキラで、誰のリンクかを分ける
+          const meState = this.state.players.find((q) => q.id === this.me);
+          const mine = meState ? e.team === meState.team : false;
+          SFX.linkSparkle(mine);
           this.linkBurst(e.x, e.y, e.pair);
+          const LINK_OUTLINE_MS = 2200;
+          if (e.object) {
+            this.linkedObjects.set(`${e.object.kind}:${e.object.id}`, { until: this.time.now + LINK_OUTLINE_MS, mine, x: e.x, y: e.y, radius: 0 });
+          } else {
+            // スラム系: オブジェクトが残らないので、成立地点に円で縁取る
+            this.linkedObjects.set(`slam:${Math.round(e.x)},${Math.round(e.y)}`, { until: this.time.now + LINK_OUTLINE_MS, mine, x: e.x, y: e.y, radius: BALANCE.heavySkills.slam.radius });
+          }
           break;
         }
         case "slamLink": {
@@ -1043,6 +1083,55 @@ export class GameScene extends Phaser.Scene {
       this.shake = Math.max(0, this.shake - 0.6);
     } else this.cameras.main.setScroll(0, 0);
 
+    // 中央エリア（裁定45）: 床の上・生成物の下に薄く敷く。人数で勝っているチームの色に寄せる
+    if (to.zone) {
+      const z = to.zone;
+      const meState = to.players.find((q) => q.id === this.me);
+      const myTeam = meState?.team;
+      const teams = Object.keys(to.teamLives).map(Number);
+      const inside: Record<number, number> = {};
+      for (const p of to.players) {
+        if (!isAlive(p)) continue;
+        if (Math.abs(p.x - z.x) > z.w / 2 || Math.abs(p.y - z.y) > z.h / 2) continue;
+        inside[p.team] = (inside[p.team] ?? 0) + 1;
+      }
+      let lead: number | null = null;
+      let best = 0;
+      let tie = false;
+      for (const t of teams) {
+        const n = inside[t] ?? 0;
+        if (n > best) { best = n; lead = t; tie = false; } else if (n === best && n > 0) tie = true;
+      }
+      const leadColor = lead === null || tie ? 0x94a3b8 : lead === myTeam ? COLORS.ally : COLORS.enemy;
+      const pulse = 0.5 + 0.5 * Math.sin(this.time.now / 400);
+      g.fillStyle(leadColor, lead === null || tie ? 0.05 : 0.09 + 0.04 * pulse);
+      g.fillRect(z.x - z.w / 2, z.y - z.h / 2, z.w, z.h);
+      g.lineStyle(3, leadColor, lead === null || tie ? 0.45 : 0.85);
+      g.strokeRect(z.x - z.w / 2, z.y - z.h / 2, z.w, z.h);
+      // 四隅の目印
+      const c = 26;
+      g.lineStyle(5, leadColor, 0.9);
+      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+        const cx = z.x + (sx * z.w) / 2, cy = z.y + (sy * z.h) / 2;
+        g.lineBetween(cx, cy, cx - sx * c, cy);
+        g.lineBetween(cx, cy, cx, cy - sy * c);
+      }
+      // ゲージ: エリア上辺の少し上に、味方（青）と敵（赤）を左右に並べる
+      const gw = Math.min(360, z.w * 0.8), gh = 10;
+      const gy = z.y - z.h / 2 - 22;
+      const allyT = myTeam ?? teams[0];
+      const foeT = teams.find((t) => t !== allyT);
+      const bar = (x0: number, ratio: number, color: number, fromLeft: boolean) => {
+        g.fillStyle(0x0f172a, 0.85);
+        g.fillRect(x0, gy, gw / 2 - 4, gh);
+        g.fillStyle(color, 0.95);
+        const w = (gw / 2 - 4) * Phaser.Math.Clamp(ratio, 0, 1);
+        g.fillRect(fromLeft ? x0 : x0 + (gw / 2 - 4) - w, gy, w, gh);
+      };
+      bar(z.x - gw / 2, allyT !== undefined ? z.gauge[allyT] ?? 0 : 0, COLORS.ally, false);
+      bar(z.x + 4, foeT !== undefined ? z.gauge[foeT] ?? 0 : 0, COLORS.enemy, true);
+    }
+
     // 生成物
     // ビルドウォール（裁定31）: 厚みのある構造物として描く
     for (const w of to.walls) {
@@ -1079,6 +1168,47 @@ export class GameScene extends Phaser.Scene {
     for (const s of to.smokes) {
       g.fillStyle(0x64748b, 0.55);
       g.fillCircle(s.x, s.y, s.radius);
+    }
+
+    // 裁定47: リンク成立オブジェクトの縁取り（味方=明るい緑 / 敵=マゼンタ）。二重線＋きらめきの点
+    if (this.linkedObjects.size > 0) {
+      const now = this.time.now;
+      for (const [key, info] of this.linkedObjects) {
+        if (now > info.until) { this.linkedObjects.delete(key); continue; }
+        const life = (info.until - now) / 2200; // 1→0
+        const col = info.mine ? 0x4ade80 : 0xe879f9;
+        const pulse = 0.6 + 0.4 * Math.sin(now / 90);
+        const a = Math.min(1, life * 1.6) * pulse;
+        const [kind, ref] = key.split(":");
+        if (kind === "wall") {
+          const w = to.walls.find((w) => w.id === Number(ref));
+          if (!w) { this.linkedObjects.delete(key); continue; }
+          const th = BALANCE.heavySkills.wall.thickness;
+          g.lineStyle(th + 14, col, 0.18 * a);
+          g.lineBetween(w.x1, w.y1, w.x2, w.y2);
+          g.lineStyle(th + 6, col, 0.9 * a);
+          g.lineBetween(w.x1, w.y1, w.x2, w.y2);
+          g.lineStyle(2, 0xffffff, 0.8 * a);
+          g.lineBetween(w.x1, w.y1, w.x2, w.y2);
+          this.linkSparks(g, (w.x1 + w.x2) / 2, (w.y1 + w.y2) / 2, Math.hypot(w.x2 - w.x1, w.y2 - w.y1) / 2 + 12, col, a, now);
+        } else if (kind === "smoke") {
+          const sm = to.smokes.find((sm) => sm.id === Number(ref));
+          if (!sm) { this.linkedObjects.delete(key); continue; }
+          g.lineStyle(12, col, 0.18 * a);
+          g.strokeCircle(sm.x, sm.y, sm.radius + 4);
+          g.lineStyle(4, col, 0.95 * a);
+          g.strokeCircle(sm.x, sm.y, sm.radius + 4);
+          g.lineStyle(1.5, 0xffffff, 0.8 * a);
+          g.strokeCircle(sm.x, sm.y, sm.radius + 9);
+          this.linkSparks(g, sm.x, sm.y, sm.radius + 16, col, a, now);
+        } else {
+          g.lineStyle(10, col, 0.18 * a);
+          g.strokeCircle(info.x, info.y, info.radius);
+          g.lineStyle(4, col, 0.95 * a);
+          g.strokeCircle(info.x, info.y, info.radius);
+          this.linkSparks(g, info.x, info.y, info.radius + 12, col, a, now);
+        }
+      }
     }
 
     const fromById = new Map(from.players.map((p) => [p.id, p]));

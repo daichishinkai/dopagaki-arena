@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { BALANCE, moveSpeedOf, shieldMaxOf, type CharClass } from "@pvp/shared";
+import { BALANCE, crossSecondsOf, moveSpeedOf, shieldMaxOf, type CharClass } from "@pvp/shared";
 import { session } from "../session";
 import { button, FONT, title } from "../ui";
 
@@ -26,7 +26,7 @@ interface Row {
 function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]; weapons: Row[]; skills: Row[]; passive: Row[]; links: string[] } {
   const C = BALANCE.classes[cls];
   const stats: Row[] = [
-    { label: "移動速度", value: `画面を${n(C.crossSeconds)}秒で横断` },
+    { label: "移動速度", value: `画面を${n(crossSecondsOf(cls))}秒で横断` },
     { label: "被ダメージ", value: `×${n(C.damageTaken, 2)}` },
     { label: "シールド", value: `${shieldMaxOf(cls)}（${C.shieldTimeRegen ? "被弾なし2秒で自然回復" : `時間回復なし・与ダメージの${n((BALANCE.shield.heavyLifestealRatio) * 100, 0)}%を回収`}）` },
     { label: "HP", value: String(BALANCE.player.hp) },

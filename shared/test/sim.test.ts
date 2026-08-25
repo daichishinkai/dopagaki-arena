@@ -71,8 +71,8 @@ describe("移動", () => {
     const p0 = s0.players[0]!;
     const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1 } }, 1);
     const moved = state.players[0]!.x - p0.x;
-    expect(moved).toBeCloseTo(BALANCE.field.width / BALANCE.classes.support.crossSeconds, 0);
-    expect(MOVE_SPEED).toBeCloseTo(BALANCE.field.width / BALANCE.classes.support.crossSeconds);
+    expect(moved).toBeCloseTo((BALANCE.field.width / BALANCE.classes.support.crossSeconds) * BALANCE.moveSpeedMultiplier, 0);
+    expect(MOVE_SPEED).toBeCloseTo((BALANCE.field.width / BALANCE.classes.support.crossSeconds) * BALANCE.moveSpeedMultiplier);
   });
   it("斜め入力でも速度は同じ", () => {
     const s0 = createMatch([{ id: "a", name: "A", cls: "support" }]);
@@ -83,7 +83,7 @@ describe("移動", () => {
   });
   it("壁を抜けない", () => {
     const s0 = createMatch([{ id: "a", name: "A", cls: "support" }]);
-    const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1, my: -1 } }, 5);
+    const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1, my: -1 } }, 12); // 裁定45: 速度半減に合わせて端まで届く時間に
     const p = state.players[0]!;
     expect(p.x).toBe(BALANCE.field.width - BALANCE.player.radius);
     expect(p.y).toBe(BALANCE.player.radius);

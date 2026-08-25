@@ -264,4 +264,18 @@ export const SFX = {
     tone(784, 0.6, "sine", 0.07, 0.04);
     noise(0.25, 0.03, 7000, "highpass", 0.02); // きらめき
   },
+  /**
+   * 裁定47: リンク成立のキラキラ。味方は上昇するアルペジオ、敵は下降するアルペジオ。
+   * 高い倍音（三角波）を重ねて「鈴が鳴る」感じにし、通常の効果音より長く響かせる。
+   */
+  linkSparkle(mine: boolean): void {
+    const up = [784, 988, 1175, 1568, 1976]; // G5 B5 D6 G6 B6
+    const seq = mine ? up : [...up].reverse();
+    seq.forEach((f, i) => {
+      tone(f, 0.55, "triangle", 0.05, i * 0.06);
+      tone(f * 2, 0.35, "sine", 0.02, i * 0.06);
+    });
+    tone(mine ? 392 : 330, 1.1, "sine", 0.04, 0.05); // 余韻の低音（味方G3／敵E3）
+    noise(0.5, 0.025, 8000, "highpass", 0.08);
+  },
 };

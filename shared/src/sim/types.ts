@@ -256,6 +256,16 @@ export interface SlamZone {
   until: number;
 }
 
+/** 中央エリア（裁定45） */
+export interface ZoneState {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** チームID → 0..1。満タンで相手の残機-1 して 0 に戻る */
+  gauge: Record<number, number>;
+}
+
 export interface SimState {
   /** 開始カウントダウンの残り秒（裁定16）。>0 の間は全処理を止める */
   countdown: number;
@@ -266,6 +276,8 @@ export interface SimState {
   mode: MatchMode;
   /** teams のみ: チームID→残機（共有5） */
   teamLives: Record<number, number>;
+  /** 中央エリア（裁定45）。teams のみ、それ以外は null */
+  zone: ZoneState | null;
   timeLeft: number;
   /** 訓練場（裁定35）: 時間を進めず、残機を減らさず、撃破後は自動復活。試合は終わらない */
   practice?: boolean;
@@ -309,5 +321,8 @@ export type SimEvent =
   | { type: "wallBreak"; id: number }
   | { type: "kill"; target: PlayerId; attacker: PlayerId }
   | { type: "respawn"; target: PlayerId }
-  | { type: "link"; pair: LinkPair; owners: [PlayerId, PlayerId]; x: number; y: number }
+  /** 裁定47: 縁取り演出のため、成立したオブジェクトの種類とIDも持つ */
+  | { type: "link"; pair: LinkPair; owners: [PlayerId, PlayerId]; team: number; x: number; y: number; object: { kind: "wall" | "smoke"; id: number } | null }
+  /** 中央エリアを制圧した（裁定45）: team が victim の残機を1つ削った */
+  | { type: "zoneCapture"; team: number; victim: number; x: number; y: number }
   | { type: "matchEnd"; result: MatchResult };
