@@ -8,7 +8,10 @@
     <title>ドパガキアリーナ</title>
     <style>
       html, body { margin: 0; background: #07070f; height: 100%; overflow: hidden; touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
-      #game { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
+      /* iOS Safari の 100vh はブラウザバーに隠れる分も含むため、実際に見えている高さを JS で --vvh に入れて使う */
+      #game { width: 100vw; height: 100vh; height: 100dvh; height: var(--vvh, 100dvh);
+        display: flex; align-items: center; justify-content: center; box-sizing: border-box;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
       canvas { image-rendering: auto; }
       /* 裁定40: タッチ端末を縦に持ったときは横向きを促す */
       #rotate { display: none; position: fixed; inset: 0; background: #07070f; color: #e5e7eb; z-index: 10;

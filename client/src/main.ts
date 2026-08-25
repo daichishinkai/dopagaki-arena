@@ -26,6 +26,21 @@ declare global {
   }
 }
 
+// 実際に見えている高さを CSS 変数に反映する。
+// iOS Safari では上下のブラウザバーの分だけ 100vh が実表示領域より大きくなり、
+// FIT スケールのキャンバスが画面外にはみ出して下のボタンが切れるため。
+function syncViewportHeight(): void {
+  const vv = window.visualViewport;
+  const h = vv ? vv.height : window.innerHeight;
+  document.documentElement.style.setProperty("--vvh", `${Math.round(h)}px`);
+  window.__game?.scale.refresh();
+}
+syncViewportHeight();
+window.addEventListener("resize", syncViewportHeight);
+window.addEventListener("orientationchange", () => setTimeout(syncViewportHeight, 200));
+window.visualViewport?.addEventListener("resize", syncViewportHeight);
+window.visualViewport?.addEventListener("scroll", syncViewportHeight);
+
 window.__game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: "game",
