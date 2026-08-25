@@ -35,6 +35,7 @@ const KILL_SLOWMO_SECONDS = 0.3;
 const KILL_SLOWMO_SCALE = 0.3;
 
 const CLASS_COLOR: Record<string, number> = { speed: COLORS.speed, heavy: 0xfb923c, support: 0xa3e635 };
+const CLASS_LABEL: Record<CharClass, string> = { speed: "スピード", heavy: "タンク", support: "サポート" };
 const WEAPON_LABEL: Record<string, string> = { saber: "刀", pistol: "ピストル", hmg: "HMG", knife: "ナイフ", sniper: "スナイパー", heal: "回復弾", jab: "素手" };
 const SKILL_LABEL: Record<string, [string, string, string]> = {
   speed: ["ソニック 35", "クラウド 30", "チャージ"],
@@ -95,7 +96,7 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     this.isHost = session.mode === "solo" || session.net.isHost;
     this.me = session.mode === "solo" ? "me" : session.net.you;
-    this.state = createMatch(session.players, session.matchMode);
+    this.state = createMatch(session.players, session.matchMode, { practice: session.mode === "solo" });
     this.botMems.clear();
     for (const b of session.bots) this.botMems.set(b.id, createBotMemory());
     this.inputs = {};
@@ -104,6 +105,7 @@ export class GameScene extends Phaser.Scene {
     this.slowmo = 0;
     this.ending = false;
     this.pendingEvents = [];
+    this.leaving = false;
 
     this.cameras.main.setBackgroundColor(COLORS.bg);
     this.drawBackground();
@@ -188,7 +190,8 @@ export class GameScene extends Phaser.Scene {
     }
     this.events.once("shutdown", () => {
       BGM.stop();
-      this.cameras.main.setZoom(1);
+      // 注意: この時点でカメラは既に破棄されている（cameras.main は undefined）。
+      // ここで cameras に触ると例外で遷移が止まり「ホームに戻る」が効かなくなる
       this.offs.forEach((f) => f());
       this.offs = [];
       this.closeMenu();
@@ -208,6 +211,7 @@ export class GameScene extends Phaser.Scene {
     const items: Array<[string, () => void]> = solo
       ? [
           ["リセット", () => { this.closeMenu(); this.resetPractice(); }],
+          [`キャラ変更（今: ${CLASS_LABEL[session.myCls]}）`, () => { this.closeMenu(); this.changePracticeClass(); }],
           ["ゲージ全快", () => { this.closeMenu(); this.refillGauges(); }],
           ["キー設定", () => { this.closeMenu(); this.openSettings(); }],
           ["対戦に戻る", () => this.closeMenu()],
@@ -258,7 +262,7 @@ export class GameScene extends Phaser.Scene {
 
   /** 訓練場を初期状態へ戻す（裁定14: ゲージはゼロ・経過時間は扱わない） */
   private resetPractice(): void {
-    this.state = createMatch(session.players, session.matchMode === "ffa" ? "ffa" : "teams");
+    this.state = createMatch(session.players, session.matchMode === "ffa" ? "ffa" : "teams", { practice: true });
     for (const p of this.state.players) {
       p.escapeGauge = 0;
       p.unifiedGauge = 0;
@@ -273,6 +277,16 @@ export class GameScene extends Phaser.Scene {
     this.notify("リセット", "#67e8f9");
   }
 
+  /** 訓練場でキャラを切り替える（裁定35）: スピード→タンク→サポートの順で回し、リセットして入り直す */
+  private changePracticeClass(): void {
+    const order: CharClass[] = ["speed", "heavy", "support"];
+    const next = order[(order.indexOf(session.myCls) + 1) % order.length]!;
+    session.myCls = next;
+    session.players = session.players.map((p) => (p.id === this.me ? { ...p, cls: next } : p));
+    this.resetPractice();
+    this.notify(`キャラ変更: ${CLASS_LABEL[next]}`, "#67e8f9");
+  }
+
   /** ゲージだけ満タンにする（コンボ・合体技の反復練習用） */
   private refillGauges(): void {
     const me = this.stateFor(this.me);
@@ -285,7 +299,12 @@ export class GameScene extends Phaser.Scene {
     this.notify("ゲージ全快", "#67e8f9");
   }
 
+  private leaving = false;
+
   private leave(message: string): void {
+    // disconnect() が "closed" を発火して leave が二重に呼ばれ、タイトルの再生成とメッセージ上書きが起きるのを防ぐ
+    if (this.leaving) return;
+    this.leaving = true;
     this.registry.set("message", message);
     session.net.disconnect();
     this.scene.start("title");
@@ -477,11 +496,32 @@ export class GameScene extends Phaser.Scene {
       this.tweens.add({ targets: ghost, alpha: 0, duration: 250, delay: i * 18, onComplete: () => ghost.destroy() });
     }
     // 始点の衝撃波
-    const ring = this.add.graphics().setDepth(4);
+    // Graphicsの拡大は自身の原点(0,0)基準なので、円は原点に描いて位置を始点に置く（ワールド座標に描くと拡大で飛んでいく）
+    const ring = this.add.graphics({ x: fromX, y: fromY }).setDepth(4);
     ring.lineStyle(3, color, 0.9);
-    ring.strokeCircle(fromX, fromY, P.radius);
+    ring.strokeCircle(0, 0, P.radius);
     this.tweens.add({ targets: ring, alpha: 0, scaleX: 2.2, scaleY: 2.2, duration: 300, onComplete: () => ring.destroy() });
-    ring.setPosition(0, 0);
+  }
+
+  /** グラウンドスラム発動の衝撃波（裁定33）: 中心から範囲の縁まで一気に広がって消える */
+  private slamShockwave(x: number, y: number, radius: number): void {
+    const color = 0xfb923c;
+    // Graphicsの拡大は原点基準なので、原点に描いて位置を中心に置く（ソニックのリングと同じ罠）
+    const ring = this.add.graphics({ x, y }).setDepth(5);
+    ring.lineStyle(6, color, 0.95);
+    ring.strokeCircle(0, 0, radius);
+    ring.fillStyle(color, 0.18);
+    ring.fillCircle(0, 0, radius);
+    ring.setScale(0.1);
+    this.tweens.add({
+      targets: ring,
+      scaleX: 1, scaleY: 1,
+      duration: 160,
+      ease: "Cubic.easeOut",
+      onComplete: () => this.tweens.add({ targets: ring, alpha: 0, duration: 220, onComplete: () => ring.destroy() }),
+    });
+    const flash = this.add.circle(x, y, 18, 0xffffff).setBlendMode(Phaser.BlendModes.ADD).setDepth(6);
+    this.tweens.add({ targets: flash, scale: 2.2, alpha: 0, duration: 200, ease: "Cubic.easeOut", onComplete: () => flash.destroy() });
   }
 
   /**
@@ -530,7 +570,7 @@ export class GameScene extends Phaser.Scene {
         this.tweens.add({ targets: ring, alpha: 0, duration: 260, onComplete: () => ring.destroy() });
       },
     });
-    SFX.center();
+    SFX.hit("sniper", 0, true); // スラムのリンク成立: 重い一撃＋中心ヒットの抜け音
   }
 
   /**
@@ -648,13 +688,15 @@ export class GameScene extends Phaser.Scene {
             this.flashUntil.set(e.target, this.time.now + 90); // 被弾側を白く光らせる
             if (!this.lowSpec) this.impact(e.x, e.y, e.center);
           }
-          if (e.target === this.me) this.shake = Math.max(this.shake, e.center ? 6 : 3);
+          if (e.target === this.me) {
+            this.shake = Math.max(this.shake, e.center ? 6 : 3);
+            if (e.damage > 0) SFX.hurt(e.center); // 裁定37: 被弾側にも音を出す
+          }
           if (e.attacker === this.me && e.damage > 0) {
             const now = this.time.now / 1000;
             this.combo = now - this.comboAt < 1 ? this.combo + 1 : 0;
             this.comboAt = now;
-            if (e.center) SFX.center();
-            else SFX.hit(this.combo); // 連続ヒットでピッチ上昇
+            SFX.hit(e.weapon, this.combo, e.center); // 裁定37: 武器別ヒット音＋連続ヒットでピッチ上昇
             // 短いヒットストップ（描画フリーズ方式: ホスト・非ホストに等しく効く）
             this.hitFreeze = Math.max(this.hitFreeze, e.center || e.melee ? 0.055 : 0.03);
           }
@@ -699,6 +741,14 @@ export class GameScene extends Phaser.Scene {
           this.sonicTrail(e.fromX, e.fromY, e.x, e.y, this.colorOf(e.owner));
           break;
         }
+        case "skill": {
+          // グラウンドスラム発動（裁定33）: 中心から外へ抜ける衝撃波
+          const owner = this.stateFor(e.owner);
+          if (owner && owner.cls === "heavy" && e.skill === 0 && !this.lowSpec) {
+            this.slamShockwave(owner.x, owner.y, BALANCE.heavySkills.slam.radius);
+          }
+          break;
+        }
         case "erase":
           SFX.deflect(); // 裁定25: 表示は出さず、軽快な「シャキン」だけ
           break;
@@ -714,11 +764,11 @@ export class GameScene extends Phaser.Scene {
           const pos = this.pos(e.target);
           if (!this.lowSpec) this.sparks(pos.x, pos.y);
           this.shake = Math.max(this.shake, 8);
-          SFX.kill();
+          SFX.kill(e.attacker === this.me ? "mine" : e.target === this.me ? "me" : "other"); // 裁定37: 撃破音の3分岐
           // 撃破時 0.3秒スロー＋ズーム（SPEC 14章）
           const cam = this.cameras.main;
-          cam.zoomTo(1.1, 120, "Cubic.Out");
-          this.time.delayedCall(360, () => cam.zoomTo(1, 260, "Cubic.Out"));
+          cam.zoomTo(1.1, 120, "Cubic.easeOut");
+          this.time.delayedCall(360, () => cam.zoomTo(1, 260, "Cubic.easeOut"));
           // 味方ダウン（2vs2/3v3）: バナー＋専用SE（SPEC 13章）
           const meP = this.stateFor(this.me);
           const tgt = this.stateFor(e.target);
@@ -745,7 +795,7 @@ export class GameScene extends Phaser.Scene {
       .text(x, y, text, { fontFamily: FONT, fontSize: `${px}px`, color, fontStyle: "bold" })
       .setOrigin(0.5)
       .setShadow(0, 0, color, 10, true, true);
-    this.tweens.add({ targets: t, y: y - 50, alpha: 0, duration: 650, ease: "Cubic.Out", onComplete: () => t.destroy() });
+    this.tweens.add({ targets: t, y: y - 50, alpha: 0, duration: 650, ease: "Cubic.easeOut", onComplete: () => t.destroy() });
   }
 
   /** 毎ヒットの小さな着弾火花 */
@@ -756,7 +806,7 @@ export class GameScene extends Phaser.Scene {
       const a = Math.random() * Math.PI * 2;
       const d = 18 + Math.random() * 26;
       const dot = this.add.circle(x, y, 2 + Math.random() * 2, color).setBlendMode(Phaser.BlendModes.ADD);
-      this.tweens.add({ targets: dot, x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, alpha: 0, duration: 220 + Math.random() * 130, ease: "Cubic.Out", onComplete: () => dot.destroy() });
+      this.tweens.add({ targets: dot, x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, alpha: 0, duration: 220 + Math.random() * 130, ease: "Cubic.easeOut", onComplete: () => dot.destroy() });
     }
   }
 
@@ -996,7 +1046,7 @@ export class GameScene extends Phaser.Scene {
         g.lineBetween(x, y, x + Math.cos(trail) * (m.reach + r) * 0.92, y + Math.sin(trail) * (m.reach + r) * 0.92);
       }
     }
-    // グラウンドスラムの溜め（裁定21）: 範囲は敵にも見える。円が縮んで着弾を予告する
+    // グラウンドスラムの溜め（裁定21・裁定33）: 範囲は敵にも見える。円が中心から外へ広がって着弾を予告する
     if (p.slamT > 0) {
       const R = BALANCE.heavySkills.slam;
       const u = 1 - p.slamT / R.windupSeconds; // 0→1
@@ -1005,7 +1055,7 @@ export class GameScene extends Phaser.Scene {
       g.lineStyle(2, 0xfb923c, 0.5);
       g.strokeCircle(x, y, R.radius);
       g.lineStyle(4, 0xfb923c, 0.95);
-      g.strokeCircle(x, y, R.radius * (1 - u));
+      g.strokeCircle(x, y, Math.max(P.radius, R.radius * u));
     }
     // ビルドウォールの構え（裁定21）: 設置予定位置にプレビューを出す
     if (p.wallAiming) {

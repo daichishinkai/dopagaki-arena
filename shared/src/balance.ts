@@ -47,9 +47,9 @@ export const BALANCE = {
 
   /** クラス別（裁定24: 横断はスピード2.1秒／タンク・支援は2.5秒で統一。被ダメ・シールドは据え置き） */
   classes: {
-    speed: { crossSeconds: 2.1, damageTaken: 1.3, shieldMax: 50, shieldTimeRegen: true },
-    heavy: { crossSeconds: 2.5, damageTaken: 0.85, shieldMax: 100, shieldTimeRegen: false },
-    support: { crossSeconds: 2.5, damageTaken: 1.0, shieldMax: 50, shieldTimeRegen: true },
+    speed: { crossSeconds: 2.4 /* 裁定36: 2.1→2.4 */, damageTaken: 1.3, shieldMax: 50, shieldTimeRegen: true },
+    heavy: { crossSeconds: 2.8 /* 裁定36: 2.5→2.8 */, damageTaken: 0.85, shieldMax: 100, shieldTimeRegen: false },
+    support: { crossSeconds: 2.8 /* 裁定36: 2.5→2.8 */, damageTaken: 1.0, shieldMax: 50, shieldTimeRegen: true },
   },
 
   shield: {
@@ -161,7 +161,7 @@ export const BALANCE = {
     /** 裁定21: 発動前に windupSeconds の溜め（範囲は敵にも見える） */
     slam: { cost: 60, radius: px(150), staggerSeconds: 0.5, windupSeconds: 0.35 },
     /** ビルドウォール（裁定21）: 長押しで構え、離した位置に設置。最大5キャラ分まで */
-    wall: { cost: 70, lengthPlayers: 2.5, hp: 80, seconds: 2.5, thickness: px(12 * 1.3), placeMaxPlayers: 5 },
+    wall: { cost: 70, lengthPlayers: 2.5, hp: 80, seconds: 6.5 /* 裁定34: 4.5→6.5 */, thickness: px(12 * 1.3), placeMaxPlayers: 5 },
     cover: { cost: 50, fallbackDashDistance: px(110), fallbackShellSeconds: 1, shellDamageCut: 0.6 },
   },
 

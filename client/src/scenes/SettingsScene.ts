@@ -44,7 +44,7 @@ export class SettingsScene extends Phaser.Scene {
           v = Math.min(100, Math.max(0, v + delta));
           setVolume(ch, v / 100);
           value.setText(`${v}%`);
-          if (ch === "sfx") SFX.hit(0); // 試し鳴らし
+          if (ch === "sfx") SFX.hit("saber", 0); // 試し鳴らし
         });
       };
       mk(-90, "◀", -10);

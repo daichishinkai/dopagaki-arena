@@ -297,3 +297,52 @@ describe("静穏オーラ（裁定9）", () => {
     expect(r.state.players[1]!.hp).toBe(50);
   });
 });
+
+describe("訓練場（裁定35）: 時間切れなし・残機減少なし・自動復活", () => {
+  it("2分を超えても試合が終わらず、timeLeftも減らない", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "speed" }, { id: "b", name: "b", cls: "support" }], "ffa", { practice: true });
+    s = { ...s, countdown: 0 };
+    const before = s.timeLeft;
+    for (let i = 0; i < 60 * 130; i++) s = step(s, {}, 1 / 60).state;
+    expect(s.phase).toBe("playing");
+    expect(s.timeLeft).toBe(before);
+  });
+  it("撃破されても残機は減らず、復活時間後に自動復活する", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "speed" }, { id: "b", name: "b", cls: "support" }], "ffa", { practice: true });
+    s = { ...s, countdown: 0 };
+    const b = s.players[1]!;
+    b.hp = 1; b.shield = 0; b.x = s.players[0]!.x + 40; b.y = s.players[0]!.y;
+    let killed = false;
+    for (let i = 0; i < 60 * 2 && !killed; i++) {
+      const r = step(s, { a: { ...NULL_INPUT, aim: 0, fire: true } }, 1 / 60);
+      s = r.state;
+      if (r.events.some((e) => e.type === "kill")) killed = true;
+    }
+    expect(killed).toBe(true);
+    expect(s.players[1]!.lives).toBe(BALANCE.player.lives);
+    for (let i = 0; i < 60 * (BALANCE.player.respawnSeconds + 0.5); i++) s = step(s, {}, 1 / 60).state;
+    expect(s.players[1]!.hp).toBeGreaterThan(0);
+    expect(s.phase).toBe("playing");
+  });
+  it("通常戦は従来どおり時間切れで終わる", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "speed" }, { id: "b", name: "b", cls: "support" }], "ffa");
+    s = { ...s, countdown: 0 };
+    for (let i = 0; i < 60 * (BALANCE.matchSeconds + 1); i++) s = step(s, {}, 1 / 60).state;
+    expect(s.phase).toBe("ended");
+  });
+});
+
+describe("ヒットイベントの武器情報（裁定37）", () => {
+  it("スピードの刀ヒットは weapon: saber、サポートのジャブは jab を持つ", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "speed" }, { id: "b", name: "b", cls: "support" }], "ffa");
+    s.players[1]!.x = s.players[0]!.x + 40; s.players[1]!.y = s.players[0]!.y;
+    const weapons = new Set<string>();
+    for (let i = 0; i < 60 * 2; i++) {
+      const r = step(s, { a: { ...NULL_INPUT, aim: 0, fire: true }, b: { ...NULL_INPUT, aim: Math.PI, fire2: true } }, 1 / 60);
+      s = r.state;
+      for (const e of r.events) if (e.type === "hit" && e.damage > 0) weapons.add(e.weapon);
+    }
+    expect(weapons.has("saber")).toBe(true);
+    expect(weapons.has("jab")).toBe(true);
+  });
+});

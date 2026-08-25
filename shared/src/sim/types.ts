@@ -147,6 +147,8 @@ export interface PlayerState {
 }
 
 export type BulletKind = "pistol" | "hmg" | "sniper" | "heal" | "stun" | "bell" | "potion";
+/** ヒットを出した武器（裁定37: 武器別ヒット音のため）。近接はクラスで一意、弾は BulletKind、link はリンク効果によるスタン */
+export type HitWeapon = "saber" | "knife" | "jab" | BulletKind | "link";
 
 export interface BulletState {
   /** エコーウォール反射による強化倍率（ダメ/回復） */
@@ -261,6 +263,8 @@ export interface SimState {
   /** teams のみ: チームID→残機（共有5） */
   teamLives: Record<number, number>;
   timeLeft: number;
+  /** 訓練場（裁定35）: 時間を進めず、残機を減らさず、撃破後は自動復活。試合は終わらない */
+  practice?: boolean;
   players: PlayerState[];
   bullets: BulletState[];
   walls: WallState[];
@@ -286,7 +290,7 @@ export type SimEvent =
   | { type: "slamLink"; pair: "slamStun" | "slamPotion"; x: number; y: number; ox: number; oy: number; radius: number }
   | { type: "shoot"; owner: PlayerId; x: number; y: number; kind: BulletKind }
   | { type: "swing"; owner: PlayerId }
-  | { type: "hit"; target: PlayerId; attacker: PlayerId; x: number; y: number; damage: number; center: boolean; guarded: boolean; melee: boolean }
+  | { type: "hit"; target: PlayerId; attacker: PlayerId; x: number; y: number; damage: number; center: boolean; guarded: boolean; melee: boolean; weapon: HitWeapon }
   | { type: "heal"; target: PlayerId; from: PlayerId; amount: number; x: number; y: number }
   | { type: "erase"; owner: PlayerId; count: number }
   | { type: "guardBreak"; target: PlayerId }

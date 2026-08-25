@@ -198,8 +198,8 @@ describe("重量型: HMG・ナイフ・統合ゲージ（SPEC 6.2）", () => {
     const r3 = run(r2.state, { b: { ...NULL_INPUT, aim: Math.PI } }, 0.3);
     // 反射弾は耐久を削らない（SPEC 6.2）
     expect(r3.state.walls[0]!.hp).toBe(80);
-    const r4 = run(r3.state, {}, 2.5);
-    expect(r4.state.walls).toHaveLength(0); // 2.5秒で消滅
+    const r4 = run(r3.state, {}, BALANCE.heavySkills.wall.seconds);
+    expect(r4.state.walls).toHaveLength(0); // 持続時間（balance.ts の wall.seconds）で消滅
   });
   it("ビルドウォール（裁定21）: 長押しで構え→離した位置に設置。最大5キャラ分でクランプ", () => {
     const s = duel("heavy", "support", 400);

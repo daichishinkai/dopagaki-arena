@@ -19,7 +19,14 @@ for (const ev of ["mousedown", "mouseup"] as const) {
   });
 }
 
-new Phaser.Game({
+// 動作確認（ブラウザ自動操作）用にゲーム本体を window に公開する。ゲームの挙動には影響しない
+declare global {
+  interface Window {
+    __game?: Phaser.Game;
+  }
+}
+
+window.__game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: "game",
   width: BALANCE.field.width,

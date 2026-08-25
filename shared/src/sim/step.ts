@@ -2,6 +2,7 @@ import { BALANCE, moveSpeedOf, shieldMaxOf, type CharClass } from "../balance";
 import type {
   BulletKind,
   BulletState,
+  HitWeapon,
   LinkPair,
   MatchResult,
   PlayerId,
@@ -129,6 +130,7 @@ export function createPlayer(id: PlayerId, name: string, cls: CharClass, slot: n
 export function createMatch(
   players: ReadonlyArray<{ id: PlayerId; name: string; cls?: CharClass; team?: number }>,
   mode: "ffa" | "teams" = "ffa",
+  options: { practice?: boolean } = {},
 ): SimState {
   const half = Math.ceil(players.length / 2);
   const teamIndex: Record<number, number> = {};
@@ -159,6 +161,7 @@ export function createMatch(
     mode,
     teamLives,
     timeLeft: BALANCE.matchSeconds,
+    practice: options.practice === true,
     players: ps,
     bullets: [],
     walls: [],
@@ -496,6 +499,11 @@ function relAngle(p: PlayerState, target: PlayerState, reach: number): { da: num
   return { da, half };
 }
 
+/** クラスごとの近接武器名（裁定37: ヒット音の分岐用） */
+function meleeWeapon(cls: CharClass): HitWeapon {
+  return cls === "speed" ? "saber" : cls === "heavy" ? "knife" : "jab";
+}
+
 /** 棒が prevA→curA と動く間に相手の体（角度幅half）を横切ったか（裁定13・23） */
 function stickCrossed(da: number, half: number, prevA: number, curA: number): boolean {
   const lo = Math.min(prevA, curA) - half;
@@ -525,7 +533,7 @@ function meleeSweepHit(state: SimState, p: PlayerState, prevA: number, curA: num
         target.lastGuardDrainSwing = p.swingId;
         drainGuard(target, G.meleeCost, events);
       }
-      events.push({ type: "hit", target: target.id, attacker: p.id, x: target.x, y: target.y, damage: 0, center: false, guarded: true, melee: true });
+      events.push({ type: "hit", target: target.id, attacker: p.id, x: target.x, y: target.y, damage: 0, center: false, guarded: true, melee: true, weapon: meleeWeapon(p.cls) });
       continue;
     }
     if (target.invuln > 0) continue;
@@ -544,7 +552,7 @@ function meleeSweepHit(state: SimState, p: PlayerState, prevA: number, curA: num
     target.lastDamagedAt = state.t;
     p.damageDealt += result.total;
     recordLinkDamage(state, p.id, result.total);
-    events.push({ type: "hit", target: target.id, attacker: p.id, x: target.x, y: target.y, damage: result.total, center: false, guarded: false, melee: true });
+    events.push({ type: "hit", target: target.id, attacker: p.id, x: target.x, y: target.y, damage: result.total, center: false, guarded: false, melee: true, weapon: meleeWeapon(p.cls) });
 
     // 回復系: セイバー=背面180度限定シールド2/hit(キャップ12/s)、ナイフ=与ダメ50%+ゲージ20、素手=HP+3(キャップ8/s・シールドと置換)
     if (p.cls === "speed") {
@@ -584,7 +592,10 @@ function onKill(state: SimState, target: PlayerState, attacker: PlayerState | un
   target.deaths += 1;
   target.guarding = false;
   target.cc = 0;
-  if (state.mode === "teams") {
+  if (state.practice) {
+    // 訓練場（裁定35）: 残機は減らさず、通常の復活時間で自動復活
+    target.respawn = P.respawnSeconds;
+  } else if (state.mode === "teams") {
     const pool = (state.teamLives[target.team] ?? 0) - 1;
     state.teamLives[target.team] = pool;
     if (pool > 0) {
@@ -905,7 +916,7 @@ function applyPendingLinks(state: SimState, events: SimEvent[]): void {
           if (t.team === link.team || !isAlive(t) || t.invuln > 0) continue;
           if (Math.hypot(t.x - smoke.x, t.y - smoke.y) <= smoke.radius) {
             applyCC(t, BALANCE.link.lightning.stunSeconds);
-            events.push({ type: "hit", target: t.id, attacker: link.owners[0]!, x: t.x, y: t.y, damage: 0, center: false, guarded: false, melee: false });
+            events.push({ type: "hit", target: t.id, attacker: link.owners[0]!, x: t.x, y: t.y, damage: 0, center: false, guarded: false, melee: false, weapon: "link" });
           }
         }
       }
@@ -937,7 +948,7 @@ function resolveBulletPlayerHit(state: SimState, b: BulletState, target: PlayerS
       target.skillCd[1] + BALANCE.supportSkills.stun.cdDelaySeconds,
       target.skillCd[2] + BALANCE.supportSkills.stun.cdDelaySeconds,
     ];
-    events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: 0, center: false, guarded: false, melee: false });
+    events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: 0, center: false, guarded: false, melee: false, weapon: b.kind });
     // 裁定27: 通常ヒットで「次の狙撃が即最大溜め」を獲得（スピード型の粘着対策）
     const shooter = state.players.find((q) => q.id === b.owner);
     if (shooter) shooter.snipeBoostUntil = state.t + BALANCE.supportSkills.stun.snipeBoostSeconds;
@@ -950,7 +961,7 @@ function resolveBulletPlayerHit(state: SimState, b: BulletState, target: PlayerS
       return;
     }
     drainGuard(target, G.shotCost, events);
-    events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: 0, center: false, guarded: true, melee: false });
+    events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: 0, center: false, guarded: true, melee: false, weapon: b.kind });
     return;
   }
   if (target.invuln > 0) return;
@@ -964,7 +975,7 @@ function resolveBulletPlayerHit(state: SimState, b: BulletState, target: PlayerS
   target.lastDamagedAt = state.t;
   if (attacker) attacker.damageDealt += result.total;
   recordLinkDamage(state, b.owner, result.total);
-  events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: result.total, center, guarded: false, melee: false });
+  events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: result.total, center, guarded: false, melee: false, weapon: b.kind });
 
   if (attacker) {
     gainShield(attacker, result.total * (attacker.cls === "heavy" ? SH.heavyLifestealRatio : SH.lifestealRatio));
@@ -1031,6 +1042,7 @@ function respawnPlayer(state: SimState, p: PlayerState, events: SimEvent[]): voi
 
 function checkMatchEnd(state: SimState, events: SimEvent[]): void {
   if (state.players.length < 2) return;
+  if (state.practice) return; // 訓練場（裁定35）: 試合終了なし
   let result: MatchResult | null = null;
   if (state.mode === "teams") {
     const aliveTeams = new Set(state.players.filter((p) => p.lives > 0).map((p) => p.team));
@@ -1073,7 +1085,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     ...prev,
     t: prev.t + dt,
     tick: prev.tick + 1,
-    timeLeft: Math.max(0, prev.timeLeft - dt),
+    timeLeft: prev.practice ? prev.timeLeft : Math.max(0, prev.timeLeft - dt),
     players: prev.players.map((p) => ({ ...p, skillCd: [...p.skillCd] as [number, number, number], skillLock: [...p.skillLock] as [number, number, number], marks: p.marks ? { ...p.marks } : null })),
     bullets: prev.bullets.map((b) => ({ ...b })),
     walls: prev.walls.map((w) => ({ ...w })),
@@ -1410,7 +1422,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
           if (t.team === b.ownerTeam || !isAlive(t) || t.invuln > 0) continue;
           if (Math.hypot(t.x - smoke.x, t.y - smoke.y) <= smoke.radius) {
             applyCC(t, BALANCE.link.lightning.stunSeconds);
-            events.push({ type: "hit", target: t.id, attacker: b.owner, x: t.x, y: t.y, damage: 0, center: false, guarded: false, melee: false });
+            events.push({ type: "hit", target: t.id, attacker: b.owner, x: t.x, y: t.y, damage: 0, center: false, guarded: false, melee: false, weapon: "link" });
           }
         }
         continue; // 弾は消滅

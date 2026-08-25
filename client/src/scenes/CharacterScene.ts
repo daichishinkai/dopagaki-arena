@@ -5,7 +5,7 @@ import { button, FONT, title } from "../ui";
 
 const F = BALANCE.field;
 const ORDER: CharClass[] = ["speed", "heavy", "support"];
-const CLASS_NAME: Record<CharClass, string> = { speed: "スピード型", heavy: "タンク", support: "支援型" };
+const CLASS_NAME: Record<CharClass, string> = { speed: "スピード", heavy: "タンク", support: "サポート" };
 const CLASS_COLOR: Record<CharClass, number> = { speed: 0x22d3ee, heavy: 0xfb923c, support: 0xa3e635 };
 
 /** 数値の丸め（小数第1位まで、整数なら整数表示） */
@@ -57,7 +57,7 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
         { label: "切り返し硬直", value: `${n((BALANCE.turnLock.minAngleRad * 180) / Math.PI, 0)}度以上の急な方向転換で最大${n(BALANCE.turnLock.at180, 2)}秒だけ足が止まる（照準と攻撃は通常どおり）` },
         { label: "逃げゲージ", value: `最大${K.gaugeMax}・毎秒${K.gaugeRegenPerSecond}回復。マーク回収で+${BALANCE.saber.markGaugeRefund}/枚` },
       ],
-      links: [`ブリーチ（タンクの壁と合わせる）：壁を味方だけすり抜け可能にし、マーク火力が${n(BALANCE.link.breach.markBoostMultiplier, 1)}倍に`, "ミストシグナル（支援型のスタン弾と合わせる）：スモーク内の敵全員をスタン"],
+      links: [`ブリーチ（タンクの壁と合わせる）：壁を味方だけすり抜け可能にし、マーク火力が${n(BALANCE.link.breach.markBoostMultiplier, 1)}倍に`, "ミストシグナル（サポートのスタン弾と合わせる）：スモーク内の敵全員をスタン"],
     };
   }
 
@@ -88,9 +88,9 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
         { label: "ガードブレイク耐性", value: `ブレイク時の硬直が${n(BALANCE.guard.heavyBreakMultiplier * 100, 0)}%（${n(BALANCE.guard.breakStunSeconds * BALANCE.guard.heavyBreakMultiplier, 2)}秒）に短縮` },
       ],
       links: [
-        "ブリーチ（スピード型のソニックと合わせる）：自分のビルドウォールを味方だけすり抜け可能にする",
-        `ライトニングスラム（支援型のスタン弾と合わせる）：のけぞりが切れる前にスタン弾がスラム範囲へ届くと、範囲の敵全員が${n(BALANCE.link.slamStun.stunSeconds, 1)}秒スタン`,
-        `ヒールスラム（支援型のポーションと合わせる）：同じ条件で、スラム範囲の味方全員が追加で${BALANCE.link.slamPotion.heal}回復`,
+        "ブリーチ（スピードのソニックと合わせる）：自分のビルドウォールを味方だけすり抜け可能にする",
+        `ライトニングスラム（サポートのスタン弾と合わせる）：のけぞりが切れる前にスタン弾がスラム範囲へ届くと、範囲の敵全員が${n(BALANCE.link.slamStun.stunSeconds, 1)}秒スタン`,
+        `ヒールスラム（サポートのポーションと合わせる）：同じ条件で、スラム範囲の味方全員が追加で${BALANCE.link.slamPotion.heal}回復`,
       ],
     };
   }
@@ -123,7 +123,7 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
       { label: "静穏オーラ", value: `半径${n(A.radius, 0)}以内の味方（自分含む）を毎秒${A.healPerSecond}回復。最後に被弾してから${n(A.calmSeconds, 0)}秒経った相手だけが対象で、重ねがけはできない` },
     ],
     links: [
-      `ライトニング（スピード型のクラウドと合わせる）：クラウド内の敵全員に${n(BALANCE.link.lightning.stunSeconds, 1)}秒のスタン`,
+      `ライトニング（スピードのクラウドと合わせる）：クラウド内の敵全員に${n(BALANCE.link.lightning.stunSeconds, 1)}秒のスタン`,
       `ライトニングスラム（タンクのグラウンドスラムと合わせる）：スラム範囲の敵全員が${n(BALANCE.link.slamStun.stunSeconds, 1)}秒スタン`,
       `ヒールスラム（タンクのグラウンドスラムと合わせる）：スラム範囲の味方全員が追加で${BALANCE.link.slamPotion.heal}回復`,
     ],
@@ -153,18 +153,18 @@ export class CharacterScene extends Phaser.Scene {
       const active = c === this.cls;
       const g = this.add.graphics();
       g.fillStyle(CLASS_COLOR[c], active ? 0.18 : 0.75);
-      g.fillCircle(x, 112, 26);
+      g.fillCircle(x, 112, 30);
       g.lineStyle(2, CLASS_COLOR[c], active ? 0.5 : 1);
-      g.strokeCircle(x, 112, 26);
+      g.strokeCircle(x, 112, 30);
       this.add
-        .text(x, 112, CLASS_NAME[c].slice(0, 2), {
+        .text(x, 112, CLASS_NAME[c], {
           fontFamily: FONT,
-          fontSize: "15px",
+          fontSize: "12px",
           color: active ? "#64748b" : "#0a1420",
           fontStyle: "bold",
         })
         .setOrigin(0.5);
-      const zone = this.add.zone(x, 112, 60, 60).setInteractive({ useHandCursor: true });
+      const zone = this.add.zone(x, 112, 64, 64).setInteractive({ useHandCursor: true });
       zone.on("pointerdown", () => {
         if (c === this.cls) return;
         this.scene.restart({ cls: c });
