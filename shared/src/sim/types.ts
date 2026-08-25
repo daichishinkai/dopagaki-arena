@@ -98,6 +98,8 @@ export interface PlayerState {
   /** バレットプルーフを構えている（裁定26） */
   bellAiming: boolean;
   bellHoldT: number;
+  /** バレットプルーフの残り時間（裁定38: 表示用。無敵の実体は invuln） */
+  bulletproofT: number;
   /** ポーションを構えている（裁定26） */
   potionAiming: boolean;
   /** スタン弾の通常ヒットで得た「次の狙撃が即最大溜め」の有効期限（裁定27） */
@@ -292,6 +294,10 @@ export type SimEvent =
   | { type: "swing"; owner: PlayerId }
   | { type: "hit"; target: PlayerId; attacker: PlayerId; x: number; y: number; damage: number; center: boolean; guarded: boolean; melee: boolean; weapon: HitWeapon }
   | { type: "heal"; target: PlayerId; from: PlayerId; amount: number; x: number; y: number }
+  /** バレットプルーフ発動（裁定38）: 対象にシールド演出＋専用音 */
+  | { type: "bulletproof"; target: PlayerId; from: PlayerId; x: number; y: number }
+  /** ポーション炸裂（裁定38）: 着弾点に範囲の円が広がる。回復した相手がいなくても出る */
+  | { type: "potion"; owner: PlayerId; x: number; y: number; radius: number }
   | { type: "erase"; owner: PlayerId; count: number }
   | { type: "guardBreak"; target: PlayerId }
   | { type: "justGuard"; target: PlayerId; attacker: PlayerId }

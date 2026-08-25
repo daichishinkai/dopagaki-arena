@@ -96,6 +96,7 @@ export function createPlayer(id: PlayerId, name: string, cls: CharClass, slot: n
     slamT: 0,
     bellAiming: false,
     bellHoldT: 0,
+    bulletproofT: 0,
     potionAiming: false,
     snipeBoostUntil: -Infinity,
     eraseCd: 0,
@@ -707,17 +708,20 @@ function placeWall(state: SimState, p: PlayerState, input: PlayerInput, events: 
   recordSkill(state, p, "wall", wallId);
 }
 
-/** バレットプルーフを自分に使う（単押し・裁定26） */
-function applyBulletproof(p: PlayerState): void {
+/** バレットプルーフを付与する（裁定26。自分への単押し／味方への着弾の両方） */
+function applyBulletproof(p: PlayerState, from: PlayerId, events: SimEvent[]): void {
   const S = BALANCE.supportSkills;
   p.invuln = Math.max(p.invuln, S.bell.invulnSeconds);
+  p.bulletproofT = S.bell.invulnSeconds;
   p.cc = 0;
   p.guardBreak = 0;
+  events.push({ type: "bulletproof", target: p.id, from, x: p.x, y: p.y });
 }
 
 /** ポーション着弾（裁定26）: 範囲の味方を回復。自分は selfRatio 倍だけ回復する */
 function detonatePotion(state: SimState, owner: PlayerState, x: number, y: number, events: SimEvent[]): void {
   const S = BALANCE.supportSkills.areaHeal;
+  events.push({ type: "potion", owner: owner.id, x, y, radius: S.radius });
   for (const t of state.players) {
     if (t.team !== owner.team || !isAlive(t)) continue;
     if (Math.hypot(t.x - x, t.y - y) > S.radius) continue;
@@ -1115,6 +1119,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     p.fireCooldown = Math.max(0, p.fireCooldown - dt);
     p.guardBreak = Math.max(0, p.guardBreak - dt);
     p.invuln = Math.max(0, p.invuln - dt);
+    p.bulletproofT = Math.max(0, Math.min(p.bulletproofT - dt, p.invuln)); // 無敵が攻撃で解除されたら表示も消す
     p.eraseCd = Math.max(0, p.eraseCd - dt);
     p.cc = Math.max(0, p.cc - dt);
     p.shell = Math.max(0, p.shell - dt);
@@ -1200,7 +1205,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
         } else if (!input.skill1Held) {
           p.bellAiming = false;
           if (p.bellHoldT < SB.tapSeconds) {
-            applyBulletproof(p);
+            applyBulletproof(p, p.id, events);
             p.skillCd[0] = SB.cooldown;
           } else {
             const ally = input.aimAllyId ? state.players.find((q) => q.id === input.aimAllyId && q.team === p.team && isAlive(q)) : undefined;
@@ -1403,8 +1408,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       const t = b.homingId ? state.players.find((q) => q.id === b.homingId) : undefined;
       if (!t || !isAlive(t)) continue; // 対象が消えたら弾も消える
       if (Math.hypot(b.x - t.x, b.y - t.y) <= P.radius + b.radius) {
-        applyBulletproof(t);
-        events.push({ type: "heal", target: t.id, from: b.owner, amount: 0, x: t.x, y: t.y });
+        applyBulletproof(t, b.owner, events);
         continue;
       }
       aliveBullets.push(b);

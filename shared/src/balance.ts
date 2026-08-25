@@ -208,7 +208,7 @@ export const BALANCE = {
     /** バレットプルーフ（旧・鈴／裁定26）: 単押し=自分／長押し=味方を選んで投擲（追尾・高速） */
     bell: { cooldown: 14, invulnSeconds: 0.75, tapSeconds: 0.15, bulletSpeed: px(1500), bulletRadius: px(9), homingRadPerSecond: 12 },
     /** ポーション（旧・範囲回復／裁定26）: 押す→離すでカーソル位置へ低速投擲。自分は3割回復 */
-    areaHeal: { cooldown: 10, radius: px(170), heal: 20, bulletSpeed: px(300), bulletRadius: px(11), selfRatio: 0.3, throwMaxPlayers: 8 },
+    areaHeal: { cooldown: 10, radius: px(170), heal: 20, bulletSpeed: px(300), bulletRadius: px(11), selfRatio: 0.3, throwMaxPlayers: 16 /* 裁定38: 8→16 */ },
     /** スタン弾。裁定27: 通常ヒットで「次の狙撃が即最大溜め」を獲得（粘着対策） */
     stun: { cooldown: 12, stunSeconds: 0.5, cdDelaySeconds: 2, bulletSpeed: px(1000), bulletRadius: px(7), snipeBoostSeconds: 6 },
   },

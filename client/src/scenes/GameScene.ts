@@ -211,7 +211,10 @@ export class GameScene extends Phaser.Scene {
     const items: Array<[string, () => void]> = solo
       ? [
           ["リセット", () => { this.closeMenu(); this.resetPractice(); }],
-          [`キャラ変更（今: ${CLASS_LABEL[session.myCls]}）`, () => { this.closeMenu(); this.changePracticeClass(); }],
+          // 裁定39: 使いたいキャラを直接選ぶ（今のキャラ以外の2つを並べる）
+          ...(["speed", "heavy", "support"] as CharClass[])
+            .filter((c) => c !== session.myCls)
+            .map((c): [string, () => void] => [`${CLASS_LABEL[c]}に変更`, () => { this.closeMenu(); this.changePracticeClass(c); }]),
           ["ゲージ全快", () => { this.closeMenu(); this.refillGauges(); }],
           ["キー設定", () => { this.closeMenu(); this.openSettings(); }],
           ["対戦に戻る", () => this.closeMenu()],
@@ -277,10 +280,9 @@ export class GameScene extends Phaser.Scene {
     this.notify("リセット", "#67e8f9");
   }
 
-  /** 訓練場でキャラを切り替える（裁定35）: スピード→タンク→サポートの順で回し、リセットして入り直す */
-  private changePracticeClass(): void {
-    const order: CharClass[] = ["speed", "heavy", "support"];
-    const next = order[(order.indexOf(session.myCls) + 1) % order.length]!;
+  /** 訓練場でキャラを切り替える（裁定35・39）: 指定したキャラにしてリセット、入り直す */
+  private changePracticeClass(next: CharClass): void {
+    if (next === session.myCls) return;
     session.myCls = next;
     session.players = session.players.map((p) => (p.id === this.me ? { ...p, cls: next } : p));
     this.resetPractice();
@@ -501,6 +503,26 @@ export class GameScene extends Phaser.Scene {
     ring.lineStyle(3, color, 0.9);
     ring.strokeCircle(0, 0, P.radius);
     this.tweens.add({ targets: ring, alpha: 0, scaleX: 2.2, scaleY: 2.2, duration: 300, onComplete: () => ring.destroy() });
+  }
+
+  /** 中心から外へ広がって消えるリング（裁定38）。startScale→1.0 に広がり、最後に薄くなる */
+  private expandRing(x: number, y: number, radius: number, endScale: number, color: number, width: number, duration: number, fillAlpha = 0): void {
+    const ring = this.add.graphics({ x, y }).setDepth(5);
+    ring.lineStyle(width, color, 0.95);
+    ring.strokeCircle(0, 0, radius);
+    if (fillAlpha > 0) {
+      ring.fillStyle(color, fillAlpha);
+      ring.fillCircle(0, 0, radius);
+    }
+    ring.setScale(endScale === 1 ? 0.15 : 1);
+    this.tweens.add({
+      targets: ring,
+      scaleX: endScale, scaleY: endScale,
+      alpha: 0,
+      duration,
+      ease: "Cubic.easeOut",
+      onComplete: () => ring.destroy(),
+    });
   }
 
   /** グラウンドスラム発動の衝撃波（裁定33）: 中心から範囲の縁まで一気に広がって消える */
@@ -727,6 +749,23 @@ export class GameScene extends Phaser.Scene {
           this.popText(e.x, e.y - 30, `+${Math.round(e.amount)}`, "#4ade80", false);
           if (e.from === this.me || e.target === this.me) SFX.heal();
           break;
+        case "bulletproof": {
+          // 裁定38: 発動の瞬間に水色のシールドが弾けて広がる＋専用音
+          this.popText(e.x, e.y - 40, "PROOF", "#67e8f9", true);
+          if (!this.lowSpec) this.expandRing(e.x, e.y, P.radius + 10, 2.4, 0x67e8f9, 5, 260);
+          if (e.from === this.me || e.target === this.me) SFX.bulletproof();
+          break;
+        }
+        case "potion": {
+          // 裁定38: 着弾点に回復範囲の円が広がって消える（回復した相手がいなくても出す）
+          if (!this.lowSpec) {
+            this.expandRing(e.x, e.y, e.radius, 1, 0x4ade80, 4, 420, 0.35);
+            const puff = this.add.circle(e.x, e.y, 14, 0x4ade80, 0.8).setDepth(4);
+            this.tweens.add({ targets: puff, scale: 3, alpha: 0, duration: 300, ease: "Cubic.easeOut", onComplete: () => puff.destroy() });
+          }
+          if (e.owner === this.me) SFX.potionBurst();
+          break;
+        }
         case "link": {
           // 裁定30: 中央のテキストは出さず、現場のエフェクトだけで見せる
           SFX.link();
@@ -1057,6 +1096,42 @@ export class GameScene extends Phaser.Scene {
       g.lineStyle(4, 0xfb923c, 0.95);
       g.strokeCircle(x, y, Math.max(P.radius, R.radius * u));
     }
+    // バレットプルーフ中（裁定38）: 水色の六角シールドが取り囲む。残り時間で薄くなる
+    if (p.bulletproofT > 0) {
+      const S = BALANCE.supportSkills.bell;
+      const u = p.bulletproofT / S.invulnSeconds; // 1→0
+      const rr = r + 9;
+      const rot = this.time.now / 400;
+      g.lineStyle(3, 0x67e8f9, 0.35 + 0.6 * u);
+      g.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = rot + (i / 6) * Math.PI * 2;
+        const hx = x + Math.cos(a) * rr;
+        const hy = y + Math.sin(a) * rr;
+        if (i === 0) g.moveTo(hx, hy);
+        else g.lineTo(hx, hy);
+      }
+      g.closePath();
+      g.strokePath();
+      g.fillStyle(0x67e8f9, 0.12 * u);
+      g.fillCircle(x, y, rr);
+    }
+    // ポーションの構え（裁定38）: 着弾予定地点に回復範囲の円と投擲線を出す
+    if (p.potionAiming) {
+      const SP = BALANCE.supportSkills.areaHeal;
+      const maxD = SP.throwMaxPlayers * P.radius * 2;
+      const d = p.id === this.me ? Math.min(Math.hypot(this.input.activePointer.worldX - x, this.input.activePointer.worldY - y), maxD) : maxD;
+      const tx = Math.min(Math.max(P.radius, x + Math.cos(p.aim) * d), F.width - P.radius);
+      const ty = Math.min(Math.max(P.radius, y + Math.sin(p.aim) * d), F.height - P.radius);
+      g.lineStyle(1, 0x4ade80, 0.35);
+      g.lineBetween(x, y, tx, ty);
+      g.fillStyle(0x4ade80, 0.1);
+      g.fillCircle(tx, ty, SP.radius);
+      g.lineStyle(2, 0x4ade80, 0.6);
+      g.strokeCircle(tx, ty, SP.radius);
+      g.fillStyle(0x4ade80, 0.9);
+      g.fillCircle(tx, ty, 4);
+    }
     // ビルドウォールの構え（裁定21）: 設置予定位置にプレビューを出す
     if (p.wallAiming) {
       const W = BALANCE.heavySkills.wall;
@@ -1131,6 +1206,13 @@ export class GameScene extends Phaser.Scene {
     if (b.kind === "bell" || b.kind === "potion") {
       const isBell = b.kind === "bell";
       const col = isBell ? 0x67e8f9 : 0x4ade80;
+      // 飛んでいる間も着弾点に範囲を出しておく（裁定38）
+      if (!isBell && b.tx !== undefined && b.ty !== undefined) {
+        g.lineStyle(2, col, 0.45);
+        g.strokeCircle(b.tx, b.ty, BALANCE.supportSkills.areaHeal.radius);
+        g.fillStyle(col, 0.06);
+        g.fillCircle(b.tx, b.ty, BALANCE.supportSkills.areaHeal.radius);
+      }
       const spin = this.time.now / (isBell ? 40 : 90); // 速い弾ほど速く回る
       const r = b.radius;
       g.fillStyle(col, 0.25);

@@ -346,3 +346,30 @@ describe("ヒットイベントの武器情報（裁定37）", () => {
     expect(weapons.has("jab")).toBe(true);
   });
 });
+
+describe("バレットプルーフとポーションの演出イベント（裁定38）", () => {
+  it("単押しで bulletproof イベントが出て、表示用タイマーが無敵と同じ長さで立つ", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "support" }, { id: "b", name: "b", cls: "speed" }], "ffa");
+    const r = step(s, { a: { ...NULL_INPUT, skill1: true, skill1Held: true } }, 1 / 60);
+    s = step(r.state, { a: { ...NULL_INPUT } }, 1 / 60).state;
+    const r2 = step(s, {}, 1 / 60);
+    const all = [...r.events, ...r2.events];
+    // 離した tick で発動する
+    expect(step(r.state, { a: { ...NULL_INPUT } }, 1 / 60).events.some((e) => e.type === "bulletproof" && e.target === "a")).toBe(true);
+    expect(r2.state.players[0]!.bulletproofT).toBeGreaterThan(0.6);
+    expect(r2.state.players[0]!.bulletproofT).toBeLessThanOrEqual(r2.state.players[0]!.invuln);
+    void all;
+  });
+  it("ポーションは回復対象がいなくても potion イベントを出す（範囲表示のため）", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "support" }, { id: "b", name: "b", cls: "speed" }], "ffa");
+    s.players[0]!.hp = BALANCE.player.hp; // 自分も満タン＝誰も回復しない
+    s = step(s, { a: { ...NULL_INPUT, skill2: true, skill2Held: true, aimDist: 0 } }, 1 / 60).state;
+    let seen = false;
+    for (let i = 0; i < 60 * 3 && !seen; i++) {
+      const r = step(s, { a: { ...NULL_INPUT, aimDist: 0 } }, 1 / 60);
+      s = r.state;
+      if (r.events.some((e) => e.type === "potion")) seen = true;
+    }
+    expect(seen).toBe(true);
+  });
+});
