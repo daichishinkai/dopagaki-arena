@@ -83,6 +83,20 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
     const total = hits.reduce((sum, e) => sum + (e.type === "hit" ? e.damage : 0), 0);
     expect(total).toBeCloseTo(BALANCE.saber.damagePerHit);
   });
+  it("裁定42: 刃先が相手の体に重なっていれば当たる（中心間 reach+半径*2 まで）", () => {
+    const R = BALANCE.player.radius;
+    // 刃の長さ = reach + 自分の半径。相手の体の手前側がちょうど刃先に触れる距離
+    const edge = BALANCE.saber.reach + R * 2;
+    // 触れている: 当たる
+    const hitS = duel("speed", "support", edge - 1);
+    const hitR = run(hitS, { a: fire }, 0.5);
+    expect(hitR.events.filter((e) => e.type === "hit" && e.melee)).toHaveLength(1);
+    // 完全に届いていない: 当たらない
+    const missS = duel("speed", "support", edge + 6);
+    const missR = run(missS, { a: fire }, 0.5);
+    expect(missR.events.filter((e) => e.type === "hit" && e.melee)).toHaveLength(0);
+  });
+
   it("マーク: ピストルヒットで付与（最大3・4秒）→ セイバー初撃で全消費 +4ダメ/枚・逃げゲージ+8/枚", () => {
     const s = duel("speed", "support", 200);
     // 3発当ててマーク3

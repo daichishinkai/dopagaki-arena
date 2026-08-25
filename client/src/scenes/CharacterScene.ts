@@ -45,7 +45,7 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
       ],
       stats,
       weapons: [
-        { label: "左クリック：刀", value: `${S.hits}ヒット計${S.damagePerHit * S.hits}ダメ・リーチ${n(S.reach, 0)}・1振り${n(S.swingSeconds, 2)}秒。背面から当てるとシールド+${S.lifestealPerHit}/hit。振り中に敵弾を消せる` },
+        { label: "左クリック：剣", value: `${S.hits}ヒット計${S.damagePerHit * S.hits}ダメ・リーチ${n(S.reach, 0)}・1振り${n(S.swingSeconds, 2)}秒。背面から当てるとシールド+${S.lifestealPerHit}/hit。振り中に敵弾を消せる` },
         { label: "右クリック：ピストル", value: `毎秒${Pl.shotsPerSecond}発・${Pl.damage}ダメ・装弾${Pl.magazine}／リロード${n(Pl.reloadSeconds, 1)}秒。命中でマーク付与（最大${Pl.markMax}・${n(Pl.markSeconds, 0)}秒）` },
       ],
       skills: [

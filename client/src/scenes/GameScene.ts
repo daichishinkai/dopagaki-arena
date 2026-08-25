@@ -37,7 +37,7 @@ const KILL_SLOWMO_SCALE = 0.3;
 
 const CLASS_COLOR: Record<string, number> = { speed: COLORS.speed, heavy: 0xfb923c, support: 0xa3e635 };
 const CLASS_LABEL: Record<CharClass, string> = { speed: "スピード", heavy: "タンク", support: "サポート" };
-const WEAPON_LABEL: Record<string, string> = { saber: "刀", pistol: "ピストル", hmg: "HMG", knife: "ナイフ", sniper: "スナイパー", heal: "回復弾", jab: "素手" };
+const WEAPON_LABEL: Record<string, string> = { saber: "剣", pistol: "ピストル", hmg: "HMG", knife: "ナイフ", sniper: "スナイパー", heal: "回復弾", jab: "素手" };
 const SKILL_LABEL: Record<string, [string, string, string]> = {
   speed: ["ソニック 35", "クラウド 30", "チャージ"],
   heavy: ["スラム 60", "ビルドウォール 70", "かばう 50"],
@@ -542,7 +542,7 @@ export class GameScene extends Phaser.Scene {
     const bellAiming = cls === "support" && (aimingId === "skill1" || releasing === "skill1");
     const aimAllyId = bellAiming ? this.allyTowards(aim) : null;
 
-    // 近接（刀・ナイフ・ジャブ）は「離した瞬間に1回」（ドラッグで向きを決めてから振れる）。
+    // 近接（剣・ナイフ・ジャブ）は「離した瞬間に1回」（ドラッグで向きを決めてから振れる）。
     // 射撃（ピストル・HMG・狙撃）は押している間（狙撃は溜め、離すと発射）
     const mainMelee = cls === "speed";
     const subMelee = cls !== "speed";
@@ -1095,6 +1095,10 @@ export class GameScene extends Phaser.Scene {
         name?.setVisible(false);
         continue;
       }
+      // 裁定43-C: 名前の文字色もチーム色にする（遠くの識別を助ける）
+      const meState = this.state.players.find((q) => q.id === this.me);
+      const allied = meState ? p.team === meState.team : p.id === this.me;
+      name?.setColor(allied ? "#93c5fd" : "#fca5a5");
       name?.setVisible(true).setPosition(x, y - P.radius - 28);
       this.drawPlayer(g, p, x, y);
     }
@@ -1102,7 +1106,7 @@ export class GameScene extends Phaser.Scene {
     const fromBullets = new Map(from.bullets.map((b) => [b.id, b]));
     for (const b of to.bullets) {
       const fb = fromBullets.get(b.id) ?? b;
-      this.drawBullet(g, b, Phaser.Math.Linear(fb.x, b.x, alpha), Phaser.Math.Linear(fb.y, b.y, alpha));
+      this.drawBullet(g, b, Phaser.Math.Linear(fb.x, b.x, alpha), Phaser.Math.Linear(fb.y, b.y, alpha), this.isEnemyBullet(b));
     }
 
     // 開始カウントダウン（裁定16）
@@ -1191,6 +1195,13 @@ export class GameScene extends Phaser.Scene {
     const dangerBlink = danger && Math.floor(this.time.now / 220) % 2 === 0;
     const blink = p.invuln > 0 && Math.floor(this.time.now / 80) % 2 === 0;
     const bodyAlpha = flashing ? 1 : blink ? 0.35 : dangerBlink ? 0.55 : 0.9;
+
+    // 裁定43-A: 足元のチームリング。乱戦で輪郭線3pxだけでは敵味方が判別できないため、
+    // 体の塗りを邪魔しない位置に大きめの色面を置く
+    g.fillStyle(teamColor, 0.22);
+    g.fillEllipse(x, y + r * 0.55, r * 2.5, r * 1.15);
+    g.lineStyle(2, teamColor, 0.75);
+    g.strokeEllipse(x, y + r * 0.55, r * 2.5, r * 1.15);
 
     // 形状: 速=鋭い三角 / 重=六角 / 支=円（SPEC 13章の色覚対応）
     g.fillStyle(bodyColor, bodyAlpha);
@@ -1366,7 +1377,8 @@ export class GameScene extends Phaser.Scene {
       g.fillStyle(color, 1);
       g.fillRect(x - bw / 2, yy, bw * Phaser.Math.Clamp(ratio, 0, 1), 5);
     };
-    bar(by, p.hp / P.hp, mine ? COLORS.hp : COLORS.enemy);
+    // 裁定43: HPバーは「味方（自分含む）=緑 / 敵=赤」。以前は自分だけ緑で味方が敵と同じ赤だった
+    bar(by, p.hp / P.hp, allied ? COLORS.hp : COLORS.enemy);
     bar(by + 7, p.shield / shieldMaxOf(p.cls), COLORS.shield);
     if (mine) {
       const guardRatio = p.cls === "heavy" ? p.unifiedGauge / BALANCE.unifiedGauge.max : p.guardGauge / BALANCE.guard.max;
@@ -1375,7 +1387,14 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private drawBullet(g: Phaser.GameObjects.Graphics, b: BulletState, x: number, y: number): void {
+  /** 裁定43-B: 敵チームの弾か（縁取りを赤にして「避けるもの」を一目で分かるようにする） */
+  private isEnemyBullet(b: BulletState): boolean {
+    const meState = this.state.players.find((q) => q.id === this.me);
+    if (!meState) return false;
+    return b.ownerTeam !== meState.team;
+  }
+
+  private drawBullet(g: Phaser.GameObjects.Graphics, b: BulletState, x: number, y: number, hostile = false): void {
     // フラスコ（裁定26）: 回転しながら飛ぶ。水色=バレットプルーフ / 緑=ポーション
     if (b.kind === "bell" || b.kind === "potion") {
       const isBell = b.kind === "bell";
@@ -1393,7 +1412,7 @@ export class GameScene extends Phaser.Scene {
       g.fillCircle(x, y, r + 4);
       g.fillStyle(col, 1);
       g.fillCircle(x, y, r);
-      g.lineStyle(2, 0xffffff, 0.9);
+      g.lineStyle(hostile ? 3 : 2, hostile ? COLORS.enemy : 0xffffff, hostile ? 1 : 0.9);
       g.strokeCircle(x, y, r);
       // 首（回転を見せる棒）
       const nx = Math.cos(spin) * (r + 5);
@@ -1409,12 +1428,21 @@ export class GameScene extends Phaser.Scene {
     const s = Math.hypot(b.vx, b.vy) || 1;
     const dx = (b.vx / s) * len;
     const dy = (b.vy / s) * len;
+    if (hostile) {
+      // 敵弾は外周に赤いにじみを足す（武器ごとの色は残したまま「赤い縁＝避ける」に統一）
+      g.lineStyle(b.radius + 7, COLORS.enemy, 0.28);
+      g.lineBetween(x - dx, y - dy, x, y);
+    }
     g.lineStyle(b.radius + 3, color, 0.25);
     g.lineBetween(x - dx, y - dy, x, y);
-    g.lineStyle(2, 0xffffff, 1);
+    g.lineStyle(2, hostile ? COLORS.enemy : 0xffffff, 1);
     g.lineBetween(x - dx, y - dy, x, y);
     g.fillStyle(color, 1);
     g.fillCircle(x, y, b.radius);
+    if (hostile) {
+      g.lineStyle(1.5, COLORS.enemy, 0.95);
+      g.strokeCircle(x, y, b.radius + 1);
+    }
   }
 }
 

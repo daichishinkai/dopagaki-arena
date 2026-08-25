@@ -408,7 +408,7 @@ function useWeapon(
   } else if (w === "heal") {
     if (down) fireHeal(state, p, events);
   } else {
-    // 近接（saber / knife / jab）。刀は押しっぱなしで連続しない（裁定25）
+    // 近接（saber / knife / jab）。剣は押しっぱなしで連続しない（裁定25）
     const edgeOnly = w === "saber";
     if (down && (!edgeOnly || !prevDown) && p.swingT <= 0) startSwing(p, sub, events);
   }
@@ -493,7 +493,11 @@ function relAngle(p: PlayerState, target: PlayerState, reach: number): { da: num
   const dx = target.x - p.x;
   const dy = target.y - p.y;
   const d = Math.hypot(dx, dy);
-  if (d > reach + P.radius) return null;
+  // 刃は自分の中心から (reach + 自分の半径) まで伸びている（描画と同じ）。
+  // そこへさらに相手の半径を足したものが、体が触れる最大の中心間距離。
+  // 裁定42: 以前は相手の半径を足しておらず、刃先が相手の体に重なっていても
+  // 中心に届かなければ当たらなかった（見えている刃の先端2割強が空振り）。
+  if (d > reach + P.radius * 2) return null;
   const da = normalizeAngle(Math.atan2(dy, dx) - p.aim);
   // 距離dから見た半径P.radiusの見込み角。密着時は広く、先端では狭くなる
   const half = d <= P.radius ? Math.PI : Math.asin(Math.min(1, P.radius / d));

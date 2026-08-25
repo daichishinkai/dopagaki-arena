@@ -141,7 +141,7 @@ export const SFX = {
   hit(weapon: HitWeapon, combo: number, center = false): void {
     const rise = Math.pow(1.06, Math.min(combo, 12));
     switch (weapon) {
-      case "saber": // 刀: 鋭い斬撃「シャッ」＋金属の余韻
+      case "saber": // 剣: 鋭い斬撃「シャッ」＋金属の余韻
         noise(0.07, 0.07, 3400 * rise, "bandpass");
         tone(1900 * rise, 0.06, "triangle", 0.045, 0, 1100);
         thump(160 * rise, 60, 0.07, 0.08);
@@ -190,7 +190,7 @@ export const SFX = {
     thump(95, 38, 0.14, center ? 0.26 : 0.2);
     if (center) tone(233, 0.12, "square", 0.04, 0, 180);
   },
-  /** 刀の弾弾き: 短く軽快な金属音（裁定25） */
+  /** 剣の弾弾き: 短く軽快な金属音（裁定25） */
   deflect(): void {
     noise(0.035, 0.07, 7000, "highpass");
     tone(2600, 0.06, "triangle", 0.05, 0, 1400);

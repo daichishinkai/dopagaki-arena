@@ -94,7 +94,7 @@ export const BALANCE = {
     markMax: 3,
     markSeconds: 4,
   },
-  /** 刀（旧セイバー）。裁定25: 2往復をやめ、重厚感のある一振りに */
+  /** 剣（旧セイバー・旧刀）。裁定25: 2往復をやめ、重厚感のある一振りに */
   saber: {
     swingSeconds: 0.55, // 振り0.3秒＋硬直0.25秒（単発なので硬直を厚めに）
     activeSeconds: 0.3,
