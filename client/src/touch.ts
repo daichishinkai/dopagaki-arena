@@ -1,6 +1,6 @@
 import Phaser from "phaser";
-import { BALANCE } from "@pvp/shared";
 import { FONT } from "./ui";
+import { VIEW } from "./viewport";
 
 /**
  * タッチ操作（裁定40・Brawl Stars方式）
@@ -36,21 +36,34 @@ export interface TouchButtonState {
   heldFor: number;
 }
 
-const F = BALANCE.field;
 const DRAG_START = 18; // これ以上動かすと照準モード
 const DRAG_MAX = 96; // 照準の最大ドラッグ量
 const STICK_R = 64;
 
-interface ButtonDef { id: TouchButtonId; x: number; y: number; r: number; color: number }
+/**
+ * 裁定56: ボタンは画面の右下隅からの相対位置で持つ。
+ * 端末が横長なほどフィールドの外（余白）へ出ていき、**指がフィールドに被らなくなる。**
+ * x/y は relayout() が VIEW から毎回計算して書き込む。
+ */
+interface ButtonDef { id: TouchButtonId; dx: number; dy: number; x: number; y: number; r: number; color: number }
 
 const LAYOUT: ButtonDef[] = [
-  { id: "main", x: 1172, y: 585, r: 60, color: 0x38bdf8 },
-  { id: "sub", x: 1062, y: 655, r: 42, color: 0xa78bfa },
-  { id: "guard", x: 955, y: 655, r: 42, color: 0xfbbf24 },
-  { id: "skill1", x: 1182, y: 452, r: 40, color: 0x4ade80 },
-  { id: "skill2", x: 1088, y: 418, r: 40, color: 0x4ade80 },
-  { id: "skill3", x: 994, y: 452, r: 40, color: 0x4ade80 },
+  { id: "main", dx: -108, dy: -135, x: 0, y: 0, r: 60, color: 0x38bdf8 },
+  { id: "sub", dx: -218, dy: -65, x: 0, y: 0, r: 42, color: 0xa78bfa },
+  { id: "guard", dx: -325, dy: -65, x: 0, y: 0, r: 42, color: 0xfbbf24 },
+  { id: "skill1", dx: -98, dy: -268, x: 0, y: 0, r: 40, color: 0x4ade80 },
+  { id: "skill2", dx: -192, dy: -302, x: 0, y: 0, r: 40, color: 0x4ade80 },
+  { id: "skill3", dx: -286, dy: -268, x: 0, y: 0, r: 40, color: 0x4ade80 },
 ];
+
+/** 画面の広さからボタンの実座標を決める。VIEW が変わっても追従するよう毎フレーム呼ぶ */
+function relayout(): void {
+  for (const b of LAYOUT) {
+    b.x = VIEW.width + b.dx;
+    b.y = VIEW.height + b.dy;
+  }
+}
+relayout();
 
 const DEPTH = 8500; // ESCメニュー(9000)より下、ゲーム描画より上
 
@@ -134,7 +147,11 @@ export class TouchControls {
 
   /** 毎フレーム呼ぶ: 経過時間の更新と描画 */
   update(dt: number): void {
-    for (const b of LAYOUT) if (this.buttons[b.id].held) this.buttons[b.id].heldFor += dt;
+    relayout();
+    for (const b of LAYOUT) {
+      if (this.buttons[b.id].held) this.buttons[b.id].heldFor += dt;
+      this.labels[b.id].setPosition(b.x, b.y);
+    }
     this.draw();
   }
 
@@ -165,7 +182,8 @@ export class TouchControls {
       s.heldFor = 0;
       return;
     }
-    if (p.x < F.width * 0.45 && !this.stick.active) {
+    // 裁定56: 判定は画面全体の左45%。フィールドの外（左の余白）を触っても動かせる
+    if (p.x < VIEW.width * 0.45 && !this.stick.active) {
       this.owners.set(p.id, "stick");
       this.stick = { active: true, pointerId: p.id, baseX: p.x, baseY: p.y, mx: 0, my: 0 };
     }

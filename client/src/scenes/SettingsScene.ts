@@ -3,6 +3,7 @@ import { BALANCE } from "@pvp/shared";
 import { BIND_LABEL, DEFAULT_BINDS, bindDisplay, loadBinds, saveBinds, type BindAction } from "../keybinds";
 import { getVolumes, setVolume, SFX } from "../sound";
 import { button, label, title } from "../ui";
+import { applyView, VIEW } from "../viewport";
 
 const ORDER: BindAction[] = ["up", "down", "left", "right", "guard", "skill1", "skill2", "skill3"];
 const CAP_W = 260;
@@ -19,6 +20,8 @@ export class SettingsScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 裁定56: フィールドを画面中央に置く（余白は左右へ均等）
+    applyView(this);
     const { width: W, height: H } = BALANCE.field;
     this.binds = loadBinds();
     this.waiting = null;

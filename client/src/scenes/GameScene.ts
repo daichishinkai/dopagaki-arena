@@ -26,6 +26,7 @@ import { COLORS, session } from "../session";
 import { BGM, SFX } from "../sound";
 import { button, FONT, label } from "../ui";
 import { reportError } from "../errors";
+import { applyView, VIEW } from "../viewport";
 import { TouchControls, type TouchButtonId } from "../touch";
 
 const F = BALANCE.field;
@@ -106,6 +107,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 裁定56: フィールドを画面中央に置く（余白は左右へ均等）
+    applyView(this);
     this.isHost = session.mode === "solo" || session.net.isHost;
     this.me = session.mode === "solo" ? "me" : session.net.you;
     this.state = createMatch(session.players, session.matchMode, { practice: session.mode === "solo" });
@@ -182,11 +185,12 @@ export class GameScene extends Phaser.Scene {
     if (session.touch) {
       // 裁定40: タッチ操作。ESCの代わりに右上のメニューボタン、下のキー案内は消してボタンに表示
       this.touch = new TouchControls(this);
+      // 裁定56: メニューボタンは画面の右上に置く（フィールドの右端ではなく、広がったキャンバスの右端）
       const mg = this.add.graphics().setDepth(8600).setScrollFactor(0);
-      mg.fillStyle(0x1e293b, 0.85).fillRoundedRect(F.width - 112, 8, 104, 34, 8);
-      mg.lineStyle(1, 0x475569, 1).strokeRoundedRect(F.width - 112, 8, 104, 34, 8);
-      label(this, F.width - 60, 25, "メニュー", 15, "#cbd5e1").setDepth(8601);
-      this.add.zone(F.width - 60, 25, 104, 34).setInteractive({ useHandCursor: true }).setDepth(8602).on("pointerdown", () => this.toggleMenu());
+      mg.fillStyle(0x1e293b, 0.85).fillRoundedRect(VIEW.width - 112, 8, 104, 34, 8);
+      mg.lineStyle(1, 0x475569, 1).strokeRoundedRect(VIEW.width - 112, 8, 104, 34, 8);
+      label(this, VIEW.width - 60, 25, "メニュー", 15, "#cbd5e1").setDepth(8601).setScrollFactor(0);
+      this.add.zone(VIEW.width - 60, 25, 104, 34).setScrollFactor(0).setInteractive({ useHandCursor: true }).setDepth(8602).on("pointerdown", () => this.toggleMenu());
       this.skillHud.setVisible(false);
       const me0 = this.stateFor(this.me);
       if (me0) this.applyTouchLabels(me0.cls);
@@ -266,12 +270,14 @@ export class GameScene extends Phaser.Scene {
     const h = 62 * items.length + 56;
     const top = F.height / 2 - h / 2;
     const bg = this.add.graphics().setDepth(9000);
-    bg.fillStyle(0x000000, 0.72).fillRect(0, 0, F.width, F.height);
+    // 裁定56: 余白ぶんまで暗くする（フィールドの外だけ明るく残るのを防ぐ）
+    bg.fillStyle(0x000000, 0.72).fillRect(-VIEW.offsetX, -VIEW.offsetY, VIEW.width, VIEW.height);
     bg.lineStyle(2, 0x22d3ee, 1).fillStyle(0x0a1420, 0.97);
     bg.fillRoundedRect(F.width / 2 - 180, top, 360, h, 14);
     bg.strokeRoundedRect(F.width / 2 - 180, top, 360, h, 14);
     // 背面クリックが下のゲームへ抜けないよう全面で受け止める
-    const blocker = this.add.zone(F.width / 2, F.height / 2, F.width, F.height).setInteractive().setDepth(9000);
+    // 裁定56: 余白ぶんも塞ぐ。フィールドの外を触ってメニュー越しに操作できてしまうのを防ぐ
+    const blocker = this.add.zone(F.width / 2, F.height / 2, VIEW.width, VIEW.height).setInteractive().setDepth(9000);
     const hint = label(this, F.width / 2, top + 24, "ESC でメニューを閉じる", 13, "#64748b").setDepth(9002);
     this.menuObjects = [bg, blocker, hint];
 
@@ -1132,9 +1138,10 @@ export class GameScene extends Phaser.Scene {
     const g = this.gfx;
     g.clear();
     if (this.shake > 0) {
-      this.cameras.main.setScroll((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
+      // 裁定56: 揺れは「中央に置いた位置」からの相対でずらす（0,0に戻すとフィールドが左に寄る）
+      this.cameras.main.setScroll(-VIEW.offsetX + (Math.random() - 0.5) * this.shake, -VIEW.offsetY + (Math.random() - 0.5) * this.shake);
       this.shake = Math.max(0, this.shake - 0.6);
-    } else this.cameras.main.setScroll(0, 0);
+    } else this.cameras.main.setScroll(-VIEW.offsetX, -VIEW.offsetY);
 
     // 中央エリア（裁定45）: 床の上・生成物の下に薄く敷く。人数で勝っているチームの色に寄せる
     if (to.zone) {

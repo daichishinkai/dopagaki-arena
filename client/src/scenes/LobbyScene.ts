@@ -2,7 +2,8 @@ import Phaser from "phaser";
 import { BALANCE, type CharClass, type LobbyBot, type MatchMode, type PlayerId, type RoomMember } from "@pvp/shared";
 import type { GameMessage } from "@pvp/shared";
 import { session } from "../session";
-import { button, label, title } from "../ui";
+import { button, FONT, label, title } from "../ui";
+import { applyView, VIEW } from "../viewport";
 
 const CLASS_NAME: Record<CharClass, string> = { speed: "スピード", heavy: "タンク", support: "サポート" };
 
@@ -15,6 +16,15 @@ type ModeChoice = "ffa" | "duo" | "trio" | "boss";
 const MODE_LABEL: Record<ModeChoice, string> = { ffa: "乱闘", boss: "ボス戦", duo: "2vs2", trio: "3v3" };
 /** 表示順（ユーザー指定）。上から縦に並べる */
 const MODE_ORDER: ModeChoice[] = ["ffa", "boss", "duo", "trio"];
+/** 裁定55: カーソルを合わせたときに出す説明。人数条件は modeNeedText() が状況に応じて別に足す */
+const MODE_DESC: Record<ModeChoice, string> = {
+  ffa: "全員が敵。最後まで残った1人が勝ち。",
+  boss: "3人でボス1体に挑む。ボスはHP10倍・体が大きく、扇状に弾を撒いてくる。挑戦者は残機を共有。",
+  duo: "2人ずつの2チーム戦。一覧の前半が味方、後半が敵。中央エリアの取り合いがある。",
+  trio: "3人ずつの2チーム戦。一覧の前半が味方、後半が敵。中央エリアの取り合いがある。",
+};
+/** そのモードに必要な合計人数 */
+const MODE_SIZE: Record<ModeChoice, string> = { ffa: "2〜4人", boss: "4人ちょうど", duo: "4人ちょうど", trio: "6人ちょうど" };
 const CLASS_ORDER: CharClass[] = ["speed", "heavy", "support"];
 
 export class LobbyScene extends Phaser.Scene {
@@ -26,6 +36,10 @@ export class LobbyScene extends Phaser.Scene {
   /** 裁定54: モードは縦4つのボタンから直接選ぶ（順ぐりのトグルは廃止） */
   private modeBtns = new Map<ModeChoice, ReturnType<typeof button>>();
   private modeHintLabel?: Phaser.GameObjects.Text;
+  /** 裁定55: モードにカーソルを合わせたときの説明（背景つきの浮くパネル） */
+  private tipBox?: Phaser.GameObjects.Container;
+  private tipBg?: Phaser.GameObjects.Graphics;
+  private tipText?: Phaser.GameObjects.Text;
   private botBtns: ReturnType<typeof button>[] = [];
   private botLevelBtn?: ReturnType<typeof button>;
   private botClsBtn?: ReturnType<typeof button>;
@@ -43,6 +57,8 @@ export class LobbyScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 裁定56: フィールドを画面中央に置く（余白は左右へ均等）
+    applyView(this);
     const { width: W, height: H } = BALANCE.field;
     const net = session.net;
     this.picks.clear();
@@ -80,9 +96,14 @@ export class LobbyScene extends Phaser.Scene {
     this.modeBtns.clear();
     label(this, W * 0.905, H * 0.315, "モード", 15, "#94a3b8");
     MODE_ORDER.forEach((choice, i) => {
-      const b = button(this, W * 0.905, H * 0.375 + i * 62, MODE_LABEL[choice], () => this.chooseMode(choice), 190, 52);
+      const y = H * 0.375 + i * 62;
+      const b = button(this, W * 0.905, y, MODE_LABEL[choice], () => this.chooseMode(choice), 190, 52);
+      // 裁定55: 説明は押せる／押せないに関係なく出す（押せない理由を読むためのものでもある）
+      b.container.on("pointerover", () => this.showTip(choice, y));
+      b.container.on("pointerout", () => this.hideTip());
       this.modeBtns.set(choice, b);
     });
+    this.buildTip();
     // 押せないボタンの理由をここに出す（ボタン名を長くすると枠からはみ出すため）
     this.modeHintLabel = label(this, W * 0.905, H * 0.375 + 3 * 62 + 40, "", 12, "#64748b");
 
@@ -207,6 +228,65 @@ export class LobbyScene extends Phaser.Scene {
   private rotate(): void {
     this.rot += 1;
     this.broadcastLobby();
+  }
+
+  /** 裁定55: 説明パネルの箱を1つだけ作っておき、中身を差し替えて使い回す */
+  private buildTip(): void {
+    this.tipBg = this.add.graphics();
+    this.tipText = this.add
+      .text(0, 0, "", { fontFamily: FONT, fontSize: "15px", color: "#e5e7eb", wordWrap: { width: 300 }, lineSpacing: 4 })
+      .setOrigin(0, 0);
+    this.tipBox = this.add.container(0, 0, [this.tipBg, this.tipText]).setDepth(500).setVisible(false);
+  }
+
+  /** 説明をボタンの左側に出す。右側は画面外なので必ず左へ開く */
+  private showTip(choice: ModeChoice, btnY: number): void {
+    const { width: W } = BALANCE.field;
+    if (!this.tipBox || !this.tipBg || !this.tipText) return;
+    const pad = 12;
+    this.tipText.setText(`【${MODE_LABEL[choice]}】\n${MODE_DESC[choice]}\n\n${this.modeNeedText(choice)}`);
+    const w = this.tipText.width + pad * 2;
+    const h = this.tipText.height + pad * 2;
+    this.tipText.setPosition(pad, pad);
+    this.tipBg.clear();
+    this.tipBg.fillStyle(0x0b1a26, 0.97);
+    this.tipBg.lineStyle(2, 0x22d3ee, 1);
+    this.tipBg.fillRoundedRect(0, 0, w, h, 10);
+    this.tipBg.strokeRoundedRect(0, 0, w, h, 10);
+    // ボタンの左隣。上下は画面からはみ出さないように寄せる
+    const x = W * 0.905 - 190 / 2 - 14 - w;
+    const y = Math.max(8, Math.min(BALANCE.field.height - h - 8, btnY - h / 2));
+    this.tipBox.setPosition(x, y).setVisible(true);
+  }
+
+  private hideTip(): void {
+    this.tipBox?.setVisible(false);
+  }
+
+  /**
+   * 裁定55: 「遊ぶには何人必要か」を今の顔ぶれから計算して文にする。
+   * 人間は増やせないので、足りないぶんは bot を足す案内にする。
+   */
+  private modeNeedText(choice: ModeChoice): string {
+    const roster = this.roster().length;
+    const humans = session.net.members.length;
+    const bots = this.bots.length;
+    const now = `いま${roster}人（プレイヤー${humans}・bot${bots}）`;
+    const cond = `条件: ${MODE_SIZE[choice]}`;
+
+    if (choice === "ffa") {
+      if (roster < 2) return `${cond}\n${now} → あと${2 - roster}人（botでも可）`;
+      if (roster > 4) return `${cond}\n${now} → ${roster - 4}人減らす`;
+      return `${cond}\n${now} → 遊べます`;
+    }
+    const need = choice === "trio" ? 6 : 4;
+    const extra = choice === "boss" ? "\n一覧のいちばん下がbotであること" : "";
+    if (roster < need) return `${cond}${extra}\n${now} → botをあと${need - roster}体追加`;
+    if (roster > need) return `${cond}${extra}\n${now} → ${roster - need}人減らす`;
+    if (choice === "boss" && !this.bossPossible()) {
+      return `${cond}${extra}\n${now} → 人数は足りているが、いちばん下がプレイヤー。「チーム分け入替」で下をbotにする`;
+    }
+    return `${cond}${extra}\n${now} → 遊べます`;
   }
 
   /** 裁定54: ボタンで直接そのモードにする。選べない組み合わせは押せないので、ここへは来ない */

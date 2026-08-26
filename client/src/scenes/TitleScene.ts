@@ -3,6 +3,7 @@ import { BALANCE } from "@pvp/shared";
 import { saveTouchPref, session } from "../session";
 import { button, FONT, label, panel, title } from "../ui";
 import { BUILD_ID } from "../build";
+import { applyView, VIEW } from "../viewport";
 
 export class TitleScene extends Phaser.Scene {
   private code = "";
@@ -13,6 +14,8 @@ export class TitleScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 裁定56: フィールドを画面中央に置く（余白は左右へ均等）
+    applyView(this);
     const { width: W, height: H } = BALANCE.field;
     const msg = (this.registry.get("message") as string | undefined) ?? "";
     this.registry.set("message", "");

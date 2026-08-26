@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { BALANCE, type GameMessage } from "@pvp/shared";
 import { session } from "../session";
 import { button, label, title } from "../ui";
+import { applyView, VIEW } from "../viewport";
 
 export class ResultScene extends Phaser.Scene {
   private offs: Array<() => void> = [];
@@ -11,6 +12,8 @@ export class ResultScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 裁定56: フィールドを画面中央に置く（余白は左右へ均等）
+    applyView(this);
     const { width: W, height: H } = BALANCE.field;
     const r = session.lastResult;
     const me = session.mode === "solo" ? "me" : session.net.you;

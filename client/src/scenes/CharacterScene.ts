@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { BALANCE, crossSecondsOf, moveSpeedOf, shieldMaxOf, type CharClass } from "@pvp/shared";
 import { session } from "../session";
 import { button, FONT, title } from "../ui";
+import { applyView, VIEW } from "../viewport";
 
 const F = BALANCE.field;
 const ORDER: CharClass[] = ["speed", "heavy", "support"];
@@ -142,6 +143,8 @@ export class CharacterScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 裁定56: フィールドを画面中央に置く（余白は左右へ均等）
+    applyView(this);
     const info = buildInfo(this.cls);
     const accent = CLASS_COLOR[this.cls];
 
