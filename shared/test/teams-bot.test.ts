@@ -204,3 +204,153 @@ describe("CPU bot（SPEC 12章）", () => {
     expect(shot).toBe(true);
   });
 });
+
+describe("中央エリア（裁定45）", () => {
+  /** 全員をエリア外の四隅に置く */
+  function apart(s: SimState): SimState {
+    const z = s.zone!;
+    const far = z.w / 2 + BALANCE.player.radius + 40;
+    s.players[0]!.x = z.x - far; s.players[0]!.y = z.y - far / 2;
+    s.players[1]!.x = z.x - far; s.players[1]!.y = z.y + far / 2;
+    s.players[2]!.x = z.x + far; s.players[2]!.y = z.y - far / 2;
+    s.players[3]!.x = z.x + far; s.players[3]!.y = z.y + far / 2;
+    return s;
+  }
+
+  it("teams では中央に広い四角のエリアがあり、乱闘・訓練場にはない", () => {
+    const t = teamsMatch();
+    expect(t.zone).not.toBeNull();
+    expect(t.zone!.w).toBeCloseTo(BALANCE.field.width * BALANCE.zone.widthRatio);
+    expect(t.zone!.h).toBeCloseTo(BALANCE.field.height * BALANCE.zone.heightRatio);
+    const ffa = createMatch([{ id: "a", name: "A" }, { id: "b", name: "B" }], "ffa");
+    expect(ffa.zone).toBeNull();
+    const practice = createMatch([{ id: "a", name: "A", team: 0 }, { id: "b", name: "B", team: 1 }], "teams", { practice: true });
+    expect(practice.zone).toBeNull();
+  });
+
+  it("人数で勝っているチームだけゲージが溜まり、満タンで相手の残機が1減る", () => {
+    const s = apart(teamsMatch());
+    const z = s.zone!;
+    // A1 だけエリアの中へ
+    s.players[0]!.x = z.x; s.players[0]!.y = z.y;
+    const before = s.teamLives[1]!;
+    const half = run(s, {}, BALANCE.zone.captureSeconds / 2);
+    expect(half.state.zone!.gauge[0]).toBeCloseTo(0.5, 1);
+    expect(half.state.zone!.gauge[1] ?? 0).toBe(0);
+    expect(half.state.teamLives[1]).toBe(before);
+    const full = run(half.state, {}, BALANCE.zone.captureSeconds / 2 + 0.2);
+    expect(full.state.teamLives[1]).toBe(before - 1);
+    expect(full.state.zone!.gauge[0]).toBeLessThan(0.1); // 0に戻って溜め直し
+    expect(full.events.some((e) => e.type === "zoneCapture" && e.team === 0 && e.victim === 1)).toBe(true);
+  });
+
+  it("同数なら（1対1で拮抗）どちらも溜まらない", () => {
+    const s = apart(teamsMatch());
+    const z = s.zone!;
+    s.players[0]!.x = z.x - 60; s.players[0]!.y = z.y;
+    s.players[2]!.x = z.x + 60; s.players[2]!.y = z.y;
+    const r = run(s, {}, 3);
+    expect(r.state.zone!.gauge[0] ?? 0).toBe(0);
+    expect(r.state.zone!.gauge[1] ?? 0).toBe(0);
+  });
+
+  it("エリア外に出てもゲージは減らない（減衰なし）", () => {
+    const s = apart(teamsMatch());
+    const z = s.zone!;
+    s.players[0]!.x = z.x; s.players[0]!.y = z.y;
+    const r1 = run(s, {}, 2);
+    const g = r1.state.zone!.gauge[0]!;
+    expect(g).toBeGreaterThan(0.2);
+    r1.state.players[0]!.x = z.x - z.w; // 外へ
+    const r2 = run(r1.state, {}, 2);
+    expect(r2.state.zone!.gauge[0]).toBeCloseTo(g, 5);
+  });
+});
+
+describe("ボス戦（裁定49）", () => {
+  function bossMatch(): SimState {
+    return createMatch(
+      [
+        { id: "p1", name: "P1", cls: "speed", team: 0 },
+        { id: "p2", name: "P2", cls: "heavy", team: 0 },
+        { id: "p3", name: "P3", cls: "support", team: 0 },
+        { id: "boss", name: "強敵", cls: "heavy", team: 1 },
+      ],
+      "boss",
+    );
+  }
+
+  it("ボスはHPが倍率ぶん多く、挑戦者は共有残機、中央エリアは出ない", () => {
+    const s = bossMatch();
+    const boss = s.players.find((p) => p.id === "boss")!;
+    expect(boss.boss).toBe(true);
+    expect(boss.hp).toBe(BALANCE.player.hp * BALANCE.boss.hpMultiplier);
+    expect(s.teamLives[0]).toBe(BALANCE.boss.playerLives);
+    expect(s.teamLives[1]).toBe(1); // ボスは1回倒されたら負け
+    expect(s.zone).toBeNull();
+    expect(s.players.filter((p) => p.team === 0)).toHaveLength(3);
+    // ボスは中央から始まる（挑戦者は左の3列）
+    expect(boss.x).toBeCloseTo(BALANCE.field.width / 2);
+    expect(boss.y).toBeCloseTo(BALANCE.field.height / 2);
+    expect(s.players.filter((p) => p.team === 0).every((p) => p.x < BALANCE.field.width / 2)).toBe(true);
+  });
+
+  it("ボスを倒すと挑戦者チームの勝ち", () => {
+    const s = bossMatch();
+    const boss = s.players.find((p) => p.id === "boss")!;
+    boss.hp = 1;
+    const p1 = s.players.find((p) => p.id === "p1")!;
+    p1.x = boss.x - 40; p1.y = boss.y; p1.aim = 0;
+    const r = run(s, { p1: { ...NULL_INPUT, aim: 0, fire: true } }, 1.0);
+    expect(r.state.result?.winnerTeam).toBe(0);
+  });
+
+  it("ボスの与ダメには倍率がかかる", () => {
+    const s = bossMatch();
+    const boss = s.players.find((p) => p.id === "boss")!;
+    const p1 = s.players.find((p) => p.id === "p1")!;
+    // ボスの正面に立たせてナイフを振らせる
+    p1.x = boss.x + 40; p1.y = boss.y;
+    boss.aim = 0;
+    const before = p1.hp + p1.shield; // シールドが先に吸うので合計で測る
+    const r = run(s, { boss: { ...NULL_INPUT, aim: 0, fire2: true } }, 0.5);
+    const after = r.state.players.find((p) => p.id === "p1")!;
+    const dealt = before - (after.hp + after.shield);
+    const base = BALANCE.knife.damage * BALANCE.classes.speed.damageTaken;
+    expect(dealt).toBeGreaterThan(base * 1.2); // 倍率1.4ぶん増えている
+  });
+
+  it("範囲ノックバック: 囲まれたら溜めて発動し、挑戦者を吹き飛ばす", () => {
+    const s = bossMatch();
+    const boss = s.players.find((p) => p.id === "boss")!;
+    const K = BALANCE.boss.knockback;
+    // 2人をボスに密着させる
+    const p1 = s.players.find((p) => p.id === "p1")!;
+    const p2 = s.players.find((p) => p.id === "p2")!;
+    p1.x = boss.x + 50; p1.y = boss.y;
+    p2.x = boss.x - 50; p2.y = boss.y;
+    const p3 = s.players.find((p) => p.id === "p3")!;
+    p3.x = 60; p3.y = 60; // 範囲外
+    const d1before = Math.hypot(p1.x - boss.x, p1.y - boss.y);
+    const r1 = run(s, {}, DT * 2);
+    expect(r1.events.some((e) => e.type === "knockbackWindup")).toBe(true);
+    const r2 = run(r1.state, {}, K.windupSeconds + 0.1);
+    expect(r2.events.some((e) => e.type === "knockback")).toBe(true);
+    const b2 = r2.state.players.find((p) => p.id === "boss")!;
+    const a1 = r2.state.players.find((p) => p.id === "p1")!;
+    expect(Math.hypot(a1.x - b2.x, a1.y - b2.y)).toBeGreaterThan(d1before + 100); // 離れた
+    expect(a1.cc).toBeGreaterThan(0); // 硬直した
+    // CDが明けるまで再発動しない
+    const r3 = run(r2.state, {}, 1.0);
+    expect(r3.events.some((e) => e.type === "knockback")).toBe(false);
+  });
+
+  it("ボス戦以外ではノックバックは起きない", () => {
+    const s = teamsMatch();
+    const a1 = s.players[0]!;
+    s.players[2]!.x = a1.x + 40; s.players[2]!.y = a1.y;
+    s.players[3]!.x = a1.x - 40; s.players[3]!.y = a1.y;
+    const r = run(s, {}, 2);
+    expect(r.events.some((e) => e.type === "knockback" || e.type === "knockbackWindup")).toBe(false);
+  });
+});

@@ -57,7 +57,7 @@ describe("クラス基礎（SPEC 16章）", () => {
     // 裁定24: タンクと支援型は同速、スピード型だけ少し速い
     expect(moveSpeedOf("heavy")).toBeCloseTo(moveSpeedOf("support"));
     expect(moveSpeedOf("speed")).toBeGreaterThan(moveSpeedOf("support"));
-    expect(moveSpeedOf("support")).toBeCloseTo(1280 / BALANCE.classes.support.crossSeconds);
+    expect(moveSpeedOf("support")).toBeCloseTo((1280 / BALANCE.classes.support.crossSeconds) * BALANCE.moveSpeedMultiplier);
   });
   it("武器構成", () => {
     expect(WEAPONS.speed).toEqual(["saber", "pistol"]);
@@ -83,6 +83,20 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
     const total = hits.reduce((sum, e) => sum + (e.type === "hit" ? e.damage : 0), 0);
     expect(total).toBeCloseTo(BALANCE.saber.damagePerHit);
   });
+  it("裁定42: 刃先が相手の体に重なっていれば当たる（中心間 reach+半径*2 まで）", () => {
+    const R = BALANCE.player.radius;
+    // 刃の長さ = reach + 自分の半径。相手の体の手前側がちょうど刃先に触れる距離
+    const edge = BALANCE.saber.reach + R * 2;
+    // 触れている: 当たる
+    const hitS = duel("speed", "support", edge - 1);
+    const hitR = run(hitS, { a: fire }, 0.5);
+    expect(hitR.events.filter((e) => e.type === "hit" && e.melee)).toHaveLength(1);
+    // 完全に届いていない: 当たらない
+    const missS = duel("speed", "support", edge + 6);
+    const missR = run(missS, { a: fire }, 0.5);
+    expect(missR.events.filter((e) => e.type === "hit" && e.melee)).toHaveLength(0);
+  });
+
   it("マーク: ピストルヒットで付与（最大3・4秒）→ セイバー初撃で全消費 +4ダメ/枚・逃げゲージ+8/枚", () => {
     const s = duel("speed", "support", 200);
     // 3発当ててマーク3
@@ -125,11 +139,13 @@ describe("スピード型: セイバー・マーク・過装填（SPEC 6.1）", 
     expect(r.state.players[0]!.x - x0).toBeCloseTo(1280 * BALANCE.speedSkills.dash.distanceRatio, 0);
     expect(r.state.players[0]!.escapeGauge).toBeLessThanOrEqual(100 - 35 + 1);
   });
-  it("スモーク: 逃げゲージ30・持続2秒", () => {
+  it("クラウド: 逃げゲージ30・持続は balance の秒数（裁定46: 4秒）", () => {
     const s = duel("speed", "support");
     const r = run(s, { a: { ...NULL_INPUT, skill2: true } }, DT * 2);
     expect(r.state.smokes).toHaveLength(1);
-    const r2 = run(r.state, {}, 2.1);
+    const mid = run(r.state, {}, BALANCE.speedSkills.smoke.seconds - 0.3);
+    expect(mid.state.smokes).toHaveLength(1); // まだ残っている
+    const r2 = run(mid.state, {}, 0.5);
     expect(r2.state.smokes).toHaveLength(0);
   });
 });
@@ -198,8 +214,8 @@ describe("重量型: HMG・ナイフ・統合ゲージ（SPEC 6.2）", () => {
     const r3 = run(r2.state, { b: { ...NULL_INPUT, aim: Math.PI } }, 0.3);
     // 反射弾は耐久を削らない（SPEC 6.2）
     expect(r3.state.walls[0]!.hp).toBe(80);
-    const r4 = run(r3.state, {}, 2.5);
-    expect(r4.state.walls).toHaveLength(0); // 2.5秒で消滅
+    const r4 = run(r3.state, {}, BALANCE.heavySkills.wall.seconds);
+    expect(r4.state.walls).toHaveLength(0); // 持続時間（balance.ts の wall.seconds）で消滅
   });
   it("ビルドウォール（裁定21）: 長押しで構え→離した位置に設置。最大5キャラ分でクランプ", () => {
     const s = duel("heavy", "support", 400);

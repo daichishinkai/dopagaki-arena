@@ -23,6 +23,8 @@ export interface PlayerInput {
   skill1: boolean;
   skill2: boolean;
   skill3: boolean;
+  /** 構え中のキャンセル（裁定40: タッチ操作用。右クリックと同じ扱い） */
+  cancel?: boolean;
 }
 
 export const NULL_INPUT: PlayerInput = {
@@ -91,6 +93,12 @@ export interface PlayerState {
   swingHitIds: PlayerId[];
   /** 現在のパス番号（切り替わったら swingHitIds を空にする） */
   swingPass: number;
+  /** ボス（裁定49）。強化倍率と専用スキルの持ち主かどうか */
+  boss?: boolean;
+  /** ボスの範囲ノックバックの溜め残り秒（>0 で溜め中） */
+  knockbackT: number;
+  /** ボスの範囲ノックバックのCD残り秒 */
+  knockbackCd: number;
   /** 近接を出したのが副武器（右クリック）か。表示と武器判定に使う */
   swingSub: boolean;
   /** ビルドウォールを構えている（裁定21）。ゲージは構え開始時に消費済み */
@@ -98,6 +106,8 @@ export interface PlayerState {
   /** バレットプルーフを構えている（裁定26） */
   bellAiming: boolean;
   bellHoldT: number;
+  /** バレットプルーフの残り時間（裁定38: 表示用。無敵の実体は invuln） */
+  bulletproofT: number;
   /** ポーションを構えている（裁定26） */
   potionAiming: boolean;
   /** スタン弾の通常ヒットで得た「次の狙撃が即最大溜め」の有効期限（裁定27） */
@@ -147,6 +157,8 @@ export interface PlayerState {
 }
 
 export type BulletKind = "pistol" | "hmg" | "sniper" | "heal" | "stun" | "bell" | "potion";
+/** ヒットを出した武器（裁定37: 武器別ヒット音のため）。近接はクラスで一意、弾は BulletKind、link はリンク効果によるスタン */
+export type HitWeapon = "saber" | "knife" | "jab" | BulletKind | "link";
 
 export interface BulletState {
   /** エコーウォール反射による強化倍率（ダメ/回復） */
@@ -205,7 +217,7 @@ export interface SmokeState {
 
 export type MatchPhase = "playing" | "ended";
 
-export type MatchMode = "ffa" | "teams";
+export type MatchMode = "ffa" | "teams" | "boss";
 
 export type LinkPair = "breach" | "lightning" | "slamStun" | "slamPotion";
 
@@ -250,6 +262,16 @@ export interface SlamZone {
   until: number;
 }
 
+/** 中央エリア（裁定45） */
+export interface ZoneState {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** チームID → 0..1。満タンで相手の残機-1 して 0 に戻る */
+  gauge: Record<number, number>;
+}
+
 export interface SimState {
   /** 開始カウントダウンの残り秒（裁定16）。>0 の間は全処理を止める */
   countdown: number;
@@ -260,7 +282,11 @@ export interface SimState {
   mode: MatchMode;
   /** teams のみ: チームID→残機（共有5） */
   teamLives: Record<number, number>;
+  /** 中央エリア（裁定45）。teams のみ、それ以外は null */
+  zone: ZoneState | null;
   timeLeft: number;
+  /** 訓練場（裁定35）: 時間を進めず、残機を減らさず、撃破後は自動復活。試合は終わらない */
+  practice?: boolean;
   players: PlayerState[];
   bullets: BulletState[];
   walls: WallState[];
@@ -286,8 +312,12 @@ export type SimEvent =
   | { type: "slamLink"; pair: "slamStun" | "slamPotion"; x: number; y: number; ox: number; oy: number; radius: number }
   | { type: "shoot"; owner: PlayerId; x: number; y: number; kind: BulletKind }
   | { type: "swing"; owner: PlayerId }
-  | { type: "hit"; target: PlayerId; attacker: PlayerId; x: number; y: number; damage: number; center: boolean; guarded: boolean; melee: boolean }
+  | { type: "hit"; target: PlayerId; attacker: PlayerId; x: number; y: number; damage: number; center: boolean; guarded: boolean; melee: boolean; weapon: HitWeapon }
   | { type: "heal"; target: PlayerId; from: PlayerId; amount: number; x: number; y: number }
+  /** バレットプルーフ発動（裁定38）: 対象にシールド演出＋専用音 */
+  | { type: "bulletproof"; target: PlayerId; from: PlayerId; x: number; y: number }
+  /** ポーション炸裂（裁定38）: 着弾点に範囲の円が広がる。回復した相手がいなくても出る */
+  | { type: "potion"; owner: PlayerId; x: number; y: number; radius: number }
   | { type: "erase"; owner: PlayerId; count: number }
   | { type: "guardBreak"; target: PlayerId }
   | { type: "justGuard"; target: PlayerId; attacker: PlayerId }
@@ -297,5 +327,11 @@ export type SimEvent =
   | { type: "wallBreak"; id: number }
   | { type: "kill"; target: PlayerId; attacker: PlayerId }
   | { type: "respawn"; target: PlayerId }
-  | { type: "link"; pair: LinkPair; owners: [PlayerId, PlayerId]; x: number; y: number }
+  /** 裁定47: 縁取り演出のため、成立したオブジェクトの種類とIDも持つ */
+  | { type: "link"; pair: LinkPair; owners: [PlayerId, PlayerId]; team: number; x: number; y: number; object: { kind: "wall" | "smoke"; id: number } | null }
+  /** 中央エリアを制圧した（裁定45）: team が victim の残機を1つ削った */
+  | { type: "zoneCapture"; team: number; victim: number; x: number; y: number }
+  /** ボスの範囲ノックバック（裁定49）: 溜め開始と発動 */
+  | { type: "knockbackWindup"; owner: PlayerId; x: number; y: number; radius: number }
+  | { type: "knockback"; owner: PlayerId; x: number; y: number; radius: number }
   | { type: "matchEnd"; result: MatchResult };

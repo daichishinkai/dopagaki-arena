@@ -71,22 +71,19 @@ describe("移動", () => {
     const p0 = s0.players[0]!;
     const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1 } }, 1);
     const moved = state.players[0]!.x - p0.x;
-    expect(moved).toBeCloseTo(BALANCE.field.width / BALANCE.classes.support.crossSeconds, 0);
-    expect(MOVE_SPEED).toBeCloseTo(BALANCE.field.width / BALANCE.classes.support.crossSeconds);
+    expect(moved).toBeCloseTo((BALANCE.field.width / BALANCE.classes.support.crossSeconds) * BALANCE.moveSpeedMultiplier, 0);
+    expect(MOVE_SPEED).toBeCloseTo((BALANCE.field.width / BALANCE.classes.support.crossSeconds) * BALANCE.moveSpeedMultiplier);
   });
   it("斜め入力でも速度は同じ", () => {
     const s0 = createMatch([{ id: "a", name: "A", cls: "support" }]);
-    // 画面端でクランプされないよう中央から測る（裁定32で移動速度が上がったため）
-    s0.players[0]!.x = BALANCE.field.width / 2;
-    s0.players[0]!.y = BALANCE.field.height / 2;
-    const p0 = { x: s0.players[0]!.x, y: s0.players[0]!.y };
-    const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1, my: 1 } }, 0.25);
+    const p0 = s0.players[0]!;
+    const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1, my: 1 } }, 0.5);
     const p = state.players[0]!;
-    expect(Math.hypot(p.x - p0.x, p.y - p0.y)).toBeCloseTo(MOVE_SPEED * 0.25, 0);
+    expect(Math.hypot(p.x - p0.x, p.y - p0.y)).toBeCloseTo(MOVE_SPEED * 0.5, 0);
   });
   it("壁を抜けない", () => {
     const s0 = createMatch([{ id: "a", name: "A", cls: "support" }]);
-    const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1, my: -1 } }, 5);
+    const { state } = run(s0, { a: { ...NULL_INPUT, mx: 1, my: -1 } }, 12); // 裁定45: 速度半減に合わせて端まで届く時間に
     const p = state.players[0]!;
     expect(p.x).toBe(BALANCE.field.width - BALANCE.player.radius);
     expect(p.y).toBe(BALANCE.player.radius);

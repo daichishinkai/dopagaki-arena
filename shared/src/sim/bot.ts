@@ -20,10 +20,12 @@ export interface BotMemory {
   fire: boolean;
   retreat: boolean;
   healAllyId: PlayerId | null;
+  /** ボス（裁定49）: 次に狙いを引き直す時刻 */
+  retargetAt: number;
 }
 
 export function createBotMemory(): BotMemory {
-  return { lastThink: -Infinity, aim: 0, targetId: null, strafeDir: 1, strafeFlipAt: 0, desiredWeapon: 0, fire: false, retreat: false, healAllyId: null };
+  return { lastThink: -Infinity, aim: 0, targetId: null, strafeDir: 1, strafeFlipAt: 0, desiredWeapon: 0, fire: false, retreat: false, healAllyId: null, retargetAt: 0 };
 }
 
 const RANGE: Record<CharClass, number[]> = {
@@ -48,9 +50,18 @@ function side(ax: number, ay: number, bx: number, by: number, px: number, py: nu
   return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
 }
 
-function pickTarget(state: SimState, me: PlayerState, level: BotLevel): PlayerState | null {
+function pickTarget(state: SimState, me: PlayerState, level: BotLevel, mem?: BotMemory, rng: () => number = Math.random, t = 0): PlayerState | null {
   const enemies = state.players.filter((p) => p.team !== me.team && isAlive(p));
   if (enemies.length === 0) return null;
+  if (me.boss && mem) {
+    // 裁定49: ボスは一定時間ごとに「最も近い人」か「最もダメージを出している人」のどちらかを引き直す。
+    // 常に同じ基準だと対策が固定化するため、どちらを見ているか読ませないのが狙い。
+    const cur = mem.targetId ? enemies.find((p) => p.id === mem.targetId) : null;
+    if (cur && t < mem.retargetAt) return cur;
+    mem.retargetAt = t + BALANCE.boss.retargetSeconds;
+    if (rng() < 0.5) return enemies.reduce((a, b) => (dist(me, a) <= dist(me, b) ? a : b));
+    return enemies.reduce((a, b) => (a.damageDealt >= b.damageDealt ? a : b));
+  }
   if (level >= 3) {
     // Lv3: 集中砲火（実質耐久が最も低い敵）
     return enemies.reduce((a, b) => (a.hp + a.shield <= b.hp + b.shield ? a : b));
@@ -65,7 +76,7 @@ function dist(a: { x: number; y: number }, b: { x: number; y: number }): number 
 /** 思考（反応遅延ごとに更新）。エイム誤差はここで乗せる */
 function think(state: SimState, me: PlayerState, mem: BotMemory, level: BotLevel, rng: () => number): void {
   const params = BALANCE.bot.levels[level];
-  const target = pickTarget(state, me, level);
+  const target = pickTarget(state, me, level, mem, rng, state.t);
   mem.targetId = target?.id ?? null;
   mem.healAllyId = null;
   if (!target) {
@@ -85,7 +96,7 @@ function think(state: SimState, me: PlayerState, mem: BotMemory, level: BotLevel
   const base = Math.atan2(aimAt.y - me.y, aimAt.x - me.x);
   mem.aim = base + (rng() * 2 - 1) * params.aimError;
 
-  mem.retreat = me.hp < 30;
+  mem.retreat = me.boss ? false : me.hp < 30; // 裁定49: ボスは引かない
   // Lv3: 弔い合戦中は攻め上がる
   if (level >= 3 && state.t < me.boostUntil) mem.retreat = false;
 

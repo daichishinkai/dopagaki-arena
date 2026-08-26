@@ -1,9 +1,10 @@
 /**
- * エラー表示オーバーレイ（裁定34）。
+ * エラー表示オーバーレイ（裁定51）。
  *
  * 背景: Phaserはフレーム処理の中で例外が外に漏れると次フレームを予約しないため、
  * 描画ループが二度と回らなくなる。画面には「最後に描いた絵」が残るので、
  * ユーザーからは「ボタンを押したら固まった」ようにしか見えず、原因が分からない。
+ * （裁定29の「撃破時に止まる」、shutdownでカメラに触って遷移が止まった件と同じ機構）
  *
  * ここでは (1) エラー内容を画面に出す (2) 必ず再読み込みで抜け出せるようにする
  * の2点だけを担う。エラーそのものを握りつぶして続行はしない（原因が隠れるため）。
@@ -15,11 +16,7 @@ let repeats = 0;
 function textOf(err: unknown): string {
   if (err instanceof Error) {
     const head = `${err.name}: ${err.message}`;
-    const stack = (err.stack ?? "")
-      .split("\n")
-      .slice(1, 4)
-      .map((s) => s.trim())
-      .join("\n");
+    const stack = (err.stack ?? "").split("\n").slice(1, 4).map((s) => s.trim()).join("\n");
     return stack ? `${head}\n${stack}` : head;
   }
   return String(err);
@@ -28,7 +25,6 @@ function textOf(err: unknown): string {
 /** エラーを画面に出す。2回目以降は件数だけ更新して重ねない */
 export function reportError(err: unknown, where: string): void {
   const body = `[${where}]\n${textOf(err)}`;
-  // 開発時に追えるようコンソールにも残す
   console.error(where, err);
 
   if (shown) {
@@ -46,6 +42,7 @@ export function reportError(err: unknown, where: string): void {
     "background:#2a0b12", "border-top:3px solid #f87171", "color:#fecaca",
     "font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace",
     "padding:14px 16px", "max-height:45vh", "overflow:auto", "white-space:pre-wrap",
+    "-webkit-text-size-adjust:100%",
   ].join(";");
 
   const head = document.createElement("div");
@@ -62,7 +59,7 @@ export function reportError(err: unknown, where: string): void {
   const reload = document.createElement("button");
   reload.textContent = "再読み込みしてホームに戻る";
   reload.style.cssText = [
-    "margin-top:12px", "margin-right:8px", "padding:8px 14px", "cursor:pointer",
+    "margin-top:12px", "margin-right:8px", "padding:10px 16px", "cursor:pointer",
     "background:#0b1a26", "color:#e5e7eb", "border:2px solid #22d3ee", "border-radius:8px",
     "font:14px ui-monospace,monospace",
   ].join(";");
@@ -71,7 +68,7 @@ export function reportError(err: unknown, where: string): void {
   const close = document.createElement("button");
   close.textContent = "閉じる";
   close.style.cssText = [
-    "margin-top:12px", "padding:8px 14px", "cursor:pointer",
+    "margin-top:12px", "padding:10px 16px", "cursor:pointer",
     "background:transparent", "color:#94a3b8", "border:1px solid #475569", "border-radius:8px",
     "font:14px ui-monospace,monospace",
   ].join(";");

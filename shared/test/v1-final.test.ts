@@ -228,6 +228,54 @@ describe("スキルリンク（SPEC 7.2）", () => {
     const enemy = r3.state.players.find((p) => p.id === "e1")!;
     expect(enemy.cc).toBeGreaterThan(0.05); // 弾道外でも炸裂スタンを受けた
   });
+
+  it("裁定47: ウォールが残っている限りソニックでブリーチが成立する（5秒後でも可）", () => {
+    const s = teamPair();
+    const hv = s.players.find((p) => p.cls === "heavy")!;
+    const sp = s.players.find((p) => p.id === "sp")!;
+    hv.x = 400; hv.y = 360; hv.aim = 0; hv.unifiedGauge = 100;
+    sp.x = 400; sp.y = 300; sp.aim = 0; sp.escapeGauge = 100;
+    // 壁を置いて5秒待つ（壁は6.5秒残る）。既存テストと同じ入力で設置する
+    const r1 = run(s, { hv: { ...NULL_INPUT, aim: 0, aimDist: 60, skill2: true } }, DT * 3);
+    expect(r1.state.walls).toHaveLength(1);
+    const r2 = run(r1.state, {}, 5.0);
+    expect(r2.state.walls).toHaveLength(1);
+    // ここでソニック
+    const r3 = run(r2.state, { sp: { ...NULL_INPUT, aim: 0, skill1: true } }, DT * 2);
+    const r4 = run(r3.state, {}, 0.5);
+    const linkEv = [...r3.events, ...r4.events].find((e) => e.type === "link");
+    expect(linkEv && linkEv.type === "link" && linkEv.pair).toBe("breach");
+    expect(r4.state.walls[0]!.breach).toBe(true);
+  });
+
+  it("裁定47: クラウドが消えた後のスタン弾はリンクしない", () => {
+    const s = teamPair();
+    const sp = s.players.find((p) => p.id === "sp")!;
+    const su = s.players.find((p) => p.id === "su")!;
+    sp.x = 600; sp.y = 360;
+    su.x = 600 - BALANCE.field.width * BALANCE.link.maxDistanceRatio * 0.8; su.y = 360; su.aim = 0;
+    const r0 = run(s, { sp: { ...NULL_INPUT, skill2: true } }, DT * 2);
+    const r1 = run(r0.state, {}, BALANCE.speedSkills.smoke.seconds + 0.3);
+    expect(r1.state.smokes).toHaveLength(0);
+    const r2 = run(r1.state, { su: { ...NULL_INPUT, aim: 0, skill3: true } }, DT * 2);
+    const r3 = run(r2.state, {}, 0.6);
+    expect([...r2.events, ...r3.events].some((e) => e.type === "link")).toBe(false);
+  });
+
+  it("裁定46: クラウドが残っていれば1.5秒あいても成立する", () => {
+    const s = teamPair();
+    const sp = s.players.find((p) => p.id === "sp")!;
+    const su = s.players.find((p) => p.id === "su")!;
+    sp.x = 600; sp.y = 360;
+    su.x = 600 - BALANCE.field.width * BALANCE.link.maxDistanceRatio * 0.8; su.y = 360; su.aim = 0;
+    const r0 = run(s, { sp: { ...NULL_INPUT, skill2: true } }, DT * 2);
+    const r1 = run(r0.state, {}, 1.5); // 1.5秒あける
+    expect(r1.state.smokes).toHaveLength(1); // クラウドはまだ残っている（4秒）
+    const r2 = run(r1.state, { su: { ...NULL_INPUT, aim: 0, skill3: true } }, DT * 2);
+    const r3 = run(r2.state, {}, 0.6);
+    const linkEv = [...r0.events, ...r1.events, ...r2.events, ...r3.events].find((e) => e.type === "link");
+    expect(linkEv && linkEv.type === "link" && linkEv.pair).toBe("lightning");
+  });
 });
 
 
@@ -295,5 +343,81 @@ describe("静穏オーラ（裁定9）", () => {
     s.players[2]!.x = 1000; // su2も遠ざける
     const r = run(s, {}, 1);
     expect(r.state.players[1]!.hp).toBe(50);
+  });
+});
+
+describe("訓練場（裁定35）: 時間切れなし・残機減少なし・自動復活", () => {
+  it("2分を超えても試合が終わらず、timeLeftも減らない", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "speed" }, { id: "b", name: "b", cls: "support" }], "ffa", { practice: true });
+    s = { ...s, countdown: 0 };
+    const before = s.timeLeft;
+    for (let i = 0; i < 60 * 130; i++) s = step(s, {}, 1 / 60).state;
+    expect(s.phase).toBe("playing");
+    expect(s.timeLeft).toBe(before);
+  });
+  it("撃破されても残機は減らず、復活時間後に自動復活する", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "speed" }, { id: "b", name: "b", cls: "support" }], "ffa", { practice: true });
+    s = { ...s, countdown: 0 };
+    const b = s.players[1]!;
+    b.hp = 1; b.shield = 0; b.x = s.players[0]!.x + 40; b.y = s.players[0]!.y;
+    let killed = false;
+    for (let i = 0; i < 60 * 2 && !killed; i++) {
+      const r = step(s, { a: { ...NULL_INPUT, aim: 0, fire: true } }, 1 / 60);
+      s = r.state;
+      if (r.events.some((e) => e.type === "kill")) killed = true;
+    }
+    expect(killed).toBe(true);
+    expect(s.players[1]!.lives).toBe(BALANCE.player.lives);
+    for (let i = 0; i < 60 * (BALANCE.player.respawnSeconds + 0.5); i++) s = step(s, {}, 1 / 60).state;
+    expect(s.players[1]!.hp).toBeGreaterThan(0);
+    expect(s.phase).toBe("playing");
+  });
+  it("通常戦は従来どおり時間切れで終わる", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "speed" }, { id: "b", name: "b", cls: "support" }], "ffa");
+    s = { ...s, countdown: 0 };
+    for (let i = 0; i < 60 * (BALANCE.matchSeconds + 1); i++) s = step(s, {}, 1 / 60).state;
+    expect(s.phase).toBe("ended");
+  });
+});
+
+describe("ヒットイベントの武器情報（裁定37）", () => {
+  it("スピードの刀ヒットは weapon: saber、サポートのジャブは jab を持つ", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "speed" }, { id: "b", name: "b", cls: "support" }], "ffa");
+    s.players[1]!.x = s.players[0]!.x + 40; s.players[1]!.y = s.players[0]!.y;
+    const weapons = new Set<string>();
+    for (let i = 0; i < 60 * 2; i++) {
+      const r = step(s, { a: { ...NULL_INPUT, aim: 0, fire: true }, b: { ...NULL_INPUT, aim: Math.PI, fire2: true } }, 1 / 60);
+      s = r.state;
+      for (const e of r.events) if (e.type === "hit" && e.damage > 0) weapons.add(e.weapon);
+    }
+    expect(weapons.has("saber")).toBe(true);
+    expect(weapons.has("jab")).toBe(true);
+  });
+});
+
+describe("バレットプルーフとポーションの演出イベント（裁定38）", () => {
+  it("単押しで bulletproof イベントが出て、表示用タイマーが無敵と同じ長さで立つ", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "support" }, { id: "b", name: "b", cls: "speed" }], "ffa");
+    const r = step(s, { a: { ...NULL_INPUT, skill1: true, skill1Held: true } }, 1 / 60);
+    s = step(r.state, { a: { ...NULL_INPUT } }, 1 / 60).state;
+    const r2 = step(s, {}, 1 / 60);
+    const all = [...r.events, ...r2.events];
+    // 離した tick で発動する
+    expect(step(r.state, { a: { ...NULL_INPUT } }, 1 / 60).events.some((e) => e.type === "bulletproof" && e.target === "a")).toBe(true);
+    expect(r2.state.players[0]!.bulletproofT).toBeGreaterThan(0.6);
+    expect(r2.state.players[0]!.bulletproofT).toBeLessThanOrEqual(r2.state.players[0]!.invuln);
+    void all;
+  });
+  it("ポーションは回復対象がいなくても potion イベントを出す（範囲表示のため）", () => {
+    let s = createMatch([{ id: "a", name: "a", cls: "support" }, { id: "b", name: "b", cls: "speed" }], "ffa");
+    s.players[0]!.hp = BALANCE.player.hp; // 自分も満タン＝誰も回復しない
+    s = step(s, { a: { ...NULL_INPUT, skill2: true, skill2Held: true, aimDist: 0 } }, 1 / 60).state;
+    let seen = false;
+    for (let i = 0; i < 60 * 3 && !seen; i++) {
+      const r = step(s, { a: { ...NULL_INPUT, aimDist: 0 } }, 1 / 60);
+      s = r.state;
+      if (r.events.some((e) => e.type === "potion")) seen = true;
+    }
+    expect(seen).toBe(true);
   });
 });
