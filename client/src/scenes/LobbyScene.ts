@@ -4,7 +4,7 @@ import type { GameMessage } from "@pvp/shared";
 import { session } from "../session";
 import { button, label, title } from "../ui";
 
-const CLASS_NAME: Record<CharClass, string> = { speed: "スピード", heavy: "タンク", support: "サポート" };
+const CLASS_NAME: Record<CharClass, string> = { speed: "スピード型", heavy: "タンク", support: "支援型" };
 const CLASS_ORDER: CharClass[] = ["speed", "heavy", "support"];
 
 export class LobbyScene extends Phaser.Scene {
@@ -13,16 +13,11 @@ export class LobbyScene extends Phaser.Scene {
   private startBtn!: ReturnType<typeof button>;
   private modeBtn!: ReturnType<typeof button>;
   private botBtns: ReturnType<typeof button>[] = [];
-  private botTargetBtn?: ReturnType<typeof button>;
-  private botLevelBtn?: ReturnType<typeof button>;
-  private botClsBtn?: ReturnType<typeof button>;
   private clsBtns = new Map<CharClass, ReturnType<typeof button>>();
   private picks = new Map<PlayerId, CharClass>();
   private bots: LobbyBot[] = [];
   private mode: MatchMode = "ffa";
   private rot = 0;
-  /** 裁定44: Lv/キャラを編集する対象のbot（bots配列の添字） */
-  private botSel = 0;
 
   constructor() {
     super("lobby");
@@ -33,7 +28,6 @@ export class LobbyScene extends Phaser.Scene {
     const net = session.net;
     this.picks.clear();
     this.bots = [];
-    this.botSel = 0;
     this.mode = "ffa";
     this.rot = 0;
     this.botBtns = [];
@@ -61,24 +55,19 @@ export class LobbyScene extends Phaser.Scene {
 
     // ホスト操作: bot・モード
     if (net.isHost) {
-      // 上段: bot の増減とモード
-      this.botBtns.push(button(this, W * 0.16, H * 0.72, "bot追加", () => this.addBot(), 250, 52));
-      this.botBtns.push(button(this, W * 0.42, H * 0.72, "bot削除", () => this.removeBot(), 250, 52));
-      this.botBtns.push(button(this, W * 0.68, H * 0.72, "チーム分け入替", () => this.rotate(), 250, 52));
-      this.modeBtn = button(this, W * 0.9, H * 0.72, "モード", () => this.toggleMode(), 200, 52);
-      // 裁定44: 下段は「対象のbotを選ぶ → Lv とキャラを個別に切り替える」
-      this.botTargetBtn = button(this, W * 0.16, H * 0.815, "対象: -", () => this.cycleBotTarget(), 250, 52);
-      this.botLevelBtn = button(this, W * 0.365, H * 0.815, "Lv: -", () => this.cycleBotLevel(), 130, 52);
-      this.botClsBtn = button(this, W * 0.58, H * 0.815, "キャラ: -", () => this.cycleBotClass(), 250, 52);
-      this.botBtns.push(this.botTargetBtn, this.botLevelBtn, this.botClsBtn);
+      this.botBtns.push(button(this, W * 0.18, H * 0.76, "bot追加", () => this.addBot()));
+      this.botBtns.push(button(this, W * 0.18, H * 0.86, "bot削除", () => this.removeBot()));
+      this.modeBtn = button(this, W * 0.82, H * 0.76, "モード", () => this.toggleMode());
+      this.botBtns.push(button(this, W * 0.5, H * 0.76, "チーム分け入替", () => this.rotate()));
+      this.botBtns.push(button(this, W * 0.82, H * 0.86, "botのLv/キャラ", () => this.cycleBot()));
     }
 
-    this.startBtn = button(this, W / 2 - 170, H * 0.915, "開始", () => this.start(), 300, 54);
-    button(this, W / 2 + 170, H * 0.915, "退出", () => {
+    this.startBtn = button(this, W / 2 - 160, H * 0.88, "開始", () => this.start());
+    button(this, W / 2 + 160, H * 0.88, "退出", () => {
       net.disconnect();
       this.scene.start("title");
-    }, 300, 54);
-    label(this, W / 2, H * 0.985, "2人=1vs1 / 3〜4人=乱闘 / 4人=2vs2 / 6人=3v3（前半チーム vs 後半チーム）", 13, "#475569");
+    });
+    label(this, W / 2, H * 0.965, "2人=1vs1 / 3〜4人=乱闘 / 4人=2vs2 / 6人=3v3（前半チーム vs 後半チーム）", 13, "#475569");
 
     this.pick(session.myCls, true);
     this.refresh();
@@ -142,45 +131,26 @@ export class LobbyScene extends Phaser.Scene {
     if (this.roster().length >= 6) return;
     const n = this.bots.length + 1;
     this.bots.push({ id: `bot-${n}`, name: `CPU${n}`, cls: CLASS_ORDER[(n - 1) % 3]!, level: 2 });
-    this.botSel = this.bots.length - 1; // 追加したbotをそのまま編集できる
     this.broadcastLobby();
   }
 
   private removeBot(): void {
     this.bots.pop();
-    if (this.botSel >= this.bots.length) this.botSel = Math.max(0, this.bots.length - 1);
     const n = this.roster().length;
     if (this.mode === "teams" && n !== 4 && n !== 6) this.mode = "ffa";
     this.broadcastLobby();
   }
 
-  /** 裁定44: 編集対象のbotを次へ */
-  private cycleBotTarget(): void {
-    if (this.bots.length === 0) return;
-    this.botSel = (this.botSel + 1) % this.bots.length;
-    this.refresh();
-  }
-
-  /** 裁定44: 選択中のbotのLvを 1→2→3→1 と回す */
-  private cycleBotLevel(): void {
-    const b = this.selectedBot();
+  /** 最後のbotの Lv→キャラ を順に回す（Lv1→Lv2→Lv3→次キャラのLv1…） */
+  private cycleBot(): void {
+    const b = this.bots[this.bots.length - 1];
     if (!b) return;
-    b.level = ((b.level % 3) + 1) as LobbyBot["level"];
+    if (b.level < 3) b.level = (b.level + 1) as LobbyBot["level"];
+    else {
+      b.level = 1;
+      b.cls = CLASS_ORDER[(CLASS_ORDER.indexOf(b.cls) + 1) % 3]!;
+    }
     this.broadcastLobby();
-  }
-
-  /** 裁定44: 選択中のbotのキャラを次へ */
-  private cycleBotClass(): void {
-    const b = this.selectedBot();
-    if (!b) return;
-    b.cls = CLASS_ORDER[(CLASS_ORDER.indexOf(b.cls) + 1) % 3]!;
-    this.broadcastLobby();
-  }
-
-  private selectedBot(): LobbyBot | undefined {
-    if (this.bots.length === 0) return undefined;
-    if (this.botSel >= this.bots.length) this.botSel = this.bots.length - 1;
-    return this.bots[this.botSel];
   }
 
   private rotate(): void {
@@ -219,23 +189,12 @@ export class LobbyScene extends Phaser.Scene {
         .map((m, i) => {
           const bot = this.bots.find((b) => b.id === m.id);
           const tag = bot ? `〈${CLASS_NAME[m.cls]}・Lv${bot.level}〉` : `〈${this.picks.has(m.id) ? CLASS_NAME[m.cls] : "選択中…"}〉`;
-          // 裁定44: 編集対象のbotに印を付ける（ホストのみ意味がある）
-          const editing = session.net.isHost && bot && bot.id === this.selectedBot()?.id ? "▶ " : "";
           const team = teams ? (i < half ? "🟦 " : "🟥 ") : "";
           const host = session.net.members[0]?.id === m.id && m.human ? "👑 " : "";
-          return `${editing}${team}${host}${m.name} ${tag}${m.id === session.net.you ? "（あなた）" : ""}`;
+          return `${team}${host}${m.name} ${tag}${m.id === session.net.you ? "（あなた）" : ""}`;
         })
         .join("\n"),
     );
-    // 裁定44: bot編集ボタンの表示を選択中のbotに合わせる
-    const sel = this.selectedBot();
-    this.botTargetBtn?.setText(sel ? `対象: ${sel.name}` : "対象: bot なし");
-    this.botLevelBtn?.setText(sel ? `Lv: ${sel.level}` : "Lv: -");
-    this.botClsBtn?.setText(sel ? `キャラ: ${CLASS_NAME[sel.cls]}` : "キャラ: -");
-    this.botTargetBtn?.setEnabled(this.bots.length > 1);
-    this.botLevelBtn?.setEnabled(!!sel);
-    this.botClsBtn?.setEnabled(!!sel);
-
     const n = roster.length;
     const canStart = session.net.isHost && (n === 2 || n === 3 || n === 4 || n === 6);
     this.startBtn.setEnabled(canStart);

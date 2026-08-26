@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { BALANCE } from "@pvp/shared";
-import { saveTouchPref, session } from "../session";
+import { session } from "../session";
 import { button, FONT, label, panel, title } from "../ui";
 
 export class TitleScene extends Phaser.Scene {
@@ -86,7 +86,7 @@ export class TitleScene extends Phaser.Scene {
     // ---- 右パネル: トレーニング ----
     panel(this, 950, 385, 480, 350, "トレーニング");
 
-    const CLASS_NAME = { speed: "スピード", heavy: "タンク", support: "サポート" } as const;
+    const CLASS_NAME = { speed: "スピード型", heavy: "タンク", support: "支援型" } as const;
     const order = ["speed", "heavy", "support"] as const;
     const clsBtn = button(this, 950, 300, `キャラ: ${CLASS_NAME[session.myCls]}`, () => {
       const i = order.indexOf(session.myCls);
@@ -124,24 +124,18 @@ export class TitleScene extends Phaser.Scene {
     order.forEach((c, i) => {
       const ix = 950 + (i - 1) * 96;
       const g = this.add.graphics();
-      g.fillStyle(CLASS_COLOR[c], 0.75).fillCircle(ix, 570, 30);
-      g.lineStyle(2, CLASS_COLOR[c], 1).strokeCircle(ix, 570, 30);
+      g.fillStyle(CLASS_COLOR[c], 0.75).fillCircle(ix, 570, 24);
+      g.lineStyle(2, CLASS_COLOR[c], 1).strokeCircle(ix, 570, 24);
       this.add
-        .text(ix, 570, CLASS_NAME[c], { fontFamily: FONT, fontSize: "12px", color: "#0a1420", fontStyle: "bold" })
+        .text(ix, 570, CLASS_NAME[c].slice(0, 2), { fontFamily: FONT, fontSize: "14px", color: "#0a1420", fontStyle: "bold" })
         .setOrigin(0.5);
       this.add
-        .zone(ix, 570, 64, 64)
+        .zone(ix, 570, 56, 56)
         .setInteractive({ useHandCursor: true })
         .on("pointerdown", () => this.scene.start("character", { cls: c }));
     });
 
     button(this, W - 130, 40, "キー設定", () => this.scene.start("settings"), 200, 44);
-    // 裁定40: 操作方式の切替（タッチ端末なら初期値がタッチ）
-    const ctlBtn = button(this, W - 350, 40, `操作: ${session.touch ? "タッチ" : "キーボード"}`, () => {
-      session.touch = !session.touch;
-      saveTouchPref(session.touch);
-      ctlBtn.setText(`操作: ${session.touch ? "タッチ" : "キーボード"}`);
-    }, 210, 44);
     label(this, W / 2, H - 22, "WASD 移動 / マウス 照準 / 左クリック 主武器 / 右クリック 副武器 / スペース 防御 / E・R・F スキル / ESC メニュー", 15, "#64748b");
   }
 

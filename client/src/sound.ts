@@ -1,4 +1,3 @@
-import type { HitWeapon } from "@pvp/shared";
 /** SE: アセットなしでWebAudio合成。ノイズ＋低音サブで「打撃感」を作る */
 let ctx: AudioContext | null = null;
 let noiseBuf: AudioBuffer | null = null;
@@ -133,64 +132,19 @@ export const SFX = {
   swing(): void {
     noise(0.09, 0.05, 900, "bandpass");
   },
-  /**
-   * 自分の攻撃が当たった音（裁定37: 武器別）。連続ヒットでピッチ上昇（SPEC 14章）。
-   * 目で見なくても「何が当たったか」が分かるよう、武器ごとに質感を変える。
-   * center=true（中心ヒット）は武器音の上に高い抜け音を重ねる。
-   */
-  hit(weapon: HitWeapon, combo: number, center = false): void {
+  /** 打撃: ノイズのアタック＋低音サブ。連続ヒットでピッチ上昇（SPEC 14章） */
+  hit(combo: number): void {
     const rise = Math.pow(1.06, Math.min(combo, 12));
-    switch (weapon) {
-      case "saber": // 剣: 鋭い斬撃「シャッ」＋金属の余韻
-        noise(0.07, 0.07, 3400 * rise, "bandpass");
-        tone(1900 * rise, 0.06, "triangle", 0.045, 0, 1100);
-        thump(160 * rise, 60, 0.07, 0.08);
-        break;
-      case "pistol": // ピストル: 乾いたスナップ「パキッ」
-        noise(0.05, 0.05, 2200 * rise, "bandpass");
-        tone(950 * rise, 0.04, "square", 0.035, 0, 480);
-        thump(190 * rise, 70, 0.06, 0.09);
-        break;
-      case "hmg": // HMG: 連射なので短く重く「ドッ」。音量は控えめ
-        noise(0.05, 0.04, 750 * rise, "lowpass");
-        thump(140 * rise, 50, 0.07, 0.11);
-        break;
-      case "knife": // ナイフ: 至近の刺突「ズブッ」。低くて湿った音
-        noise(0.06, 0.05, 520 * rise, "lowpass");
-        thump(120 * rise, 40, 0.12, 0.17);
-        tone(420 * rise, 0.04, "square", 0.025, 0, 200);
-        break;
-      case "sniper": // 狙撃: 一撃の「バキィン」。長めの尾を引く
-        noise(0.1, 0.09, 2600 * rise, "highpass");
-        thump(300 * rise, 45, 0.2, 0.2);
-        tone(1250 * rise, 0.12, "sawtooth", 0.035, 0, 300);
-        break;
-      case "jab": // ジャブ: 乾いた「ポッ」。軽い
-        noise(0.03, 0.045, 1200 * rise, "bandpass");
-        tone(520 * rise, 0.04, "square", 0.03, 0, 300);
-        thump(170 * rise, 70, 0.05, 0.07);
-        break;
-      default: // スタン弾など: 従来の汎用打撃
-        noise(0.06, 0.09, 1400 * rise, "bandpass");
-        thump(150 * rise, 55, 0.1, 0.14);
-    }
-    if (center) {
-      // 中心ヒット: 武器音の上に高く抜ける「キン」と重いサブを重ねる
-      noise(0.07, 0.1, 3200, "highpass");
-      thump(220, 60, 0.14, 0.12);
-      tone(1760, 0.09, "sine", 0.05, 0.01);
-    }
+    noise(0.06, 0.09, 1400 * rise, "bandpass");
+    thump(150 * rise, 55, 0.1, 0.14);
   },
-  /**
-   * 自分が殴られた音（裁定37）。攻撃側の音より鈍く低く、体に来る「ドスッ」。
-   * 中心を取られたときは短い不協和音を足して「まずい」を伝える。
-   */
-  hurt(center: boolean): void {
-    noise(0.08, 0.07, 420, "lowpass");
-    thump(95, 38, 0.14, center ? 0.26 : 0.2);
-    if (center) tone(233, 0.12, "square", 0.04, 0, 180);
+  /** 中心ヒットは別の音: 高く抜ける＋重いサブ */
+  center(): void {
+    noise(0.07, 0.1, 3200, "highpass");
+    thump(220, 60, 0.14, 0.18);
+    tone(1760, 0.09, "sine", 0.05, 0.01);
   },
-  /** 剣の弾弾き: 短く軽快な金属音（裁定25） */
+  /** 刀の弾弾き: 短く軽快な金属音（裁定25） */
   deflect(): void {
     noise(0.035, 0.07, 7000, "highpass");
     tone(2600, 0.06, "triangle", 0.05, 0, 1400);
@@ -203,48 +157,13 @@ export const SFX = {
     noise(0.2, 0.12, 800, "lowpass");
     thump(200, 40, 0.3, 0.2);
   },
-  /**
-   * 撃破音（裁定37: 3分岐）。
-   * "mine"   = 自分が倒した: 爆発＋上昇アルペジオ（いちばん気持ちいい音）
-   * "me"     = 自分が倒された: 低く沈む下降音（悔しい音）
-   * "other"  = 他人同士: 従来の爆発を遠くで小さく
-   */
-  kill(who: "mine" | "me" | "other"): void {
-    if (who === "me") {
-      noise(0.35, 0.16, 320, "lowpass");
-      thump(85, 28, 0.45, 0.24);
-      tone(440, 0.5, "sawtooth", 0.05, 0, 110);
-      tone(330, 0.5, "square", 0.03, 0.05, 82);
-      return;
-    }
-    const v = who === "mine" ? 1 : 0.45;
-    noise(0.18, 0.14 * v, 1000, "lowpass");
-    thump(110, 35, 0.32, 0.24 * v);
-    tone(880, 0.12, "square", 0.05 * v, 0.03, 440);
-    if (who === "mine") {
-      // 上昇アルペジオ: C6 → E6 → G6 → C7。撃破スロー0.3秒の間に鳴り切る
-      tone(1047, 0.08, "square", 0.045, 0.06);
-      tone(1319, 0.08, "square", 0.045, 0.12);
-      tone(1568, 0.1, "square", 0.05, 0.18);
-      tone(2093, 0.22, "sine", 0.06, 0.24);
-      noise(0.25, 0.03, 8000, "highpass", 0.24); // きらめき
-    }
+  kill(): void {
+    noise(0.18, 0.14, 1000, "lowpass");
+    thump(110, 35, 0.32, 0.24);
+    tone(880, 0.12, "square", 0.05, 0.03, 440);
   },
   heal(): void {
     tone(660, 0.1, "sine", 0.04, 0, 990);
-  },
-  /** バレットプルーフ発動（裁定38）: ガラスが張るような高い「キィン」＋短い上昇 */
-  bulletproof(): void {
-    noise(0.12, 0.03, 9000, "highpass");
-    tone(1568, 0.22, "sine", 0.05, 0, 2093);
-    tone(2349, 0.26, "triangle", 0.035, 0.04, 3136);
-    thump(180, 90, 0.08, 0.06);
-  },
-  /** ポーション炸裂（裁定38）: 液体が弾ける「ポシャッ」＋柔らかい上昇音 */
-  potionBurst(): void {
-    noise(0.1, 0.06, 1500, "bandpass");
-    tone(392, 0.16, "sine", 0.04, 0.02, 587);
-    tone(523, 0.2, "sine", 0.03, 0.06, 784);
   },
   bigHit(): void {
     noise(0.12, 0.16, 2200, "bandpass");
@@ -263,19 +182,5 @@ export const SFX = {
     tone(659, 0.5, "sine", 0.07, 0.02);
     tone(784, 0.6, "sine", 0.07, 0.04);
     noise(0.25, 0.03, 7000, "highpass", 0.02); // きらめき
-  },
-  /**
-   * 裁定47: リンク成立のキラキラ。味方は上昇するアルペジオ、敵は下降するアルペジオ。
-   * 高い倍音（三角波）を重ねて「鈴が鳴る」感じにし、通常の効果音より長く響かせる。
-   */
-  linkSparkle(mine: boolean): void {
-    const up = [784, 988, 1175, 1568, 1976]; // G5 B5 D6 G6 B6
-    const seq = mine ? up : [...up].reverse();
-    seq.forEach((f, i) => {
-      tone(f, 0.55, "triangle", 0.05, i * 0.06);
-      tone(f * 2, 0.35, "sine", 0.02, i * 0.06);
-    });
-    tone(mine ? 392 : 330, 1.1, "sine", 0.04, 0.05); // 余韻の低音（味方G3／敵E3）
-    noise(0.5, 0.025, 8000, "highpass", 0.08);
   },
 };
