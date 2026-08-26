@@ -43,14 +43,33 @@ export const BALANCE = {
    * 数値はすべて調整プレースホルダー。
    */
   boss: {
-    /** HP倍率（2-A: HPを大きくする方式） */
-    hpMultiplier: 6,
+    /** HP倍率（裁定53: 6→10。挑戦者が速くなった裁定52ぶんの上乗せも兼ねる） */
+    hpMultiplier: 10,
     /**
-     * 半径は変えない（裁定49）。当たり判定を変えると23か所に影響し、
-     * 見た目だけ大きくすると裁定42で直した「見えているのに当たらない」が再発するため。
+     * 体の大きさの倍率（裁定53・ユーザー決定）。
+     * 裁定49では「見た目だけ大きくすると裁定42の空振りが再発する」として見送ったが、
+     * 今回は当たり判定・壁の押し出し・場外クランプ・近接の見込み角まで
+     * すべて radiusOf() 経由に直したうえで大きくしている。見た目だけ変えてはいけない。
+     * 副作用: 的が大きい＝当てやすい＝実質HPが減る。hpMultiplier と相殺関係にある。
      */
-    /** 与ダメ倍率 */
-    damageMultiplier: 1.4,
+    radiusMultiplier: 1.6,
+    /** 与ダメ倍率（裁定53: 1.4→1.0。近接で殴り倒す形から、弾を撒く形へ寄せた） */
+    damageMultiplier: 1.0,
+    /**
+     * 扇状の弾（裁定53・ユーザー決定）。ボスは入力を持たないのでシミュレーション側で自動発動。
+     * 低ダメージ・低速・大きめの弾で「隙間を抜けて避ける」遊びを作るのが狙い。
+     * 通常弾扱いなので剣で消せる。
+     */
+    fan: {
+      cooldown: 2.2,
+      /** 発数（奇数なら正面にも1発飛ぶ） */
+      count: 5,
+      /** 端から端までの合計角度 */
+      spreadRad: (44 * Math.PI) / 180,
+      speed: px(430),
+      damage: 6,
+      radius: px(11),
+    },
     /** 3人側のチーム共有残機 */
     playerLives: 7,
     /** 狙いの切り替え: この秒数ごとに「最も近い人」「最もダメージを出している人」のどちらかを引き直す */
@@ -306,6 +325,15 @@ export function moveSpeedOf(cls: CharClass): number {
 export function crossSecondsOf(cls: CharClass): number {
   return BALANCE.classes[cls].crossSeconds / BALANCE.moveSpeedMultiplier;
 }
+/**
+ * そのキャラの体の半径（裁定53）。ボスだけ大きい。
+ * 当たり判定・壁の押し出し・場外クランプ・描画は必ずこれを通すこと。
+ * 片方だけ P.radius のままにすると、裁定42で直した「見えているのに当たらない」が再発する。
+ */
+export function radiusOf(p: { boss?: boolean }): number {
+  return BALANCE.player.radius * (p.boss ? BALANCE.boss.radiusMultiplier : 1);
+}
+
 export function shieldMaxOf(cls: CharClass): number {
   return BALANCE.classes[cls].shieldMax;
 }

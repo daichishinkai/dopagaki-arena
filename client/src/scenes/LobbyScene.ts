@@ -5,6 +5,16 @@ import { session } from "../session";
 import { button, label, title } from "../ui";
 
 const CLASS_NAME: Record<CharClass, string> = { speed: "スピード", heavy: "タンク", support: "サポート" };
+
+/**
+ * 裁定54: 画面で選ぶモード。
+ * 2vs2 と 3v3 はどちらも内部的には teams で、人数で決まる。
+ * ボタンとしては別物なので、UI側だけこの4値で持つ（通信する MatchMode は従来どおり3値）。
+ */
+type ModeChoice = "ffa" | "duo" | "trio" | "boss";
+const MODE_LABEL: Record<ModeChoice, string> = { ffa: "乱闘", boss: "ボス戦", duo: "2vs2", trio: "3v3" };
+/** 表示順（ユーザー指定）。上から縦に並べる */
+const MODE_ORDER: ModeChoice[] = ["ffa", "boss", "duo", "trio"];
 const CLASS_ORDER: CharClass[] = ["speed", "heavy", "support"];
 
 export class LobbyScene extends Phaser.Scene {
@@ -13,7 +23,9 @@ export class LobbyScene extends Phaser.Scene {
   private rows: Phaser.GameObjects.Text[] = [];
   private rowsTop = 0;
   private startBtn!: ReturnType<typeof button>;
-  private modeBtn!: ReturnType<typeof button>;
+  /** 裁定54: モードは縦4つのボタンから直接選ぶ（順ぐりのトグルは廃止） */
+  private modeBtns = new Map<ModeChoice, ReturnType<typeof button>>();
+  private modeHintLabel?: Phaser.GameObjects.Text;
   private botBtns: ReturnType<typeof button>[] = [];
   private botLevelBtn?: ReturnType<typeof button>;
   private botClsBtn?: ReturnType<typeof button>;
@@ -64,13 +76,22 @@ export class LobbyScene extends Phaser.Scene {
     this.rowsTop = H * 0.525;
     this.rows = [];
 
+    // 裁定54: モードは右側の縦4つから直接選ぶ。ホスト以外も「いま何が選ばれているか」が見える
+    this.modeBtns.clear();
+    label(this, W * 0.905, H * 0.315, "モード", 15, "#94a3b8");
+    MODE_ORDER.forEach((choice, i) => {
+      const b = button(this, W * 0.905, H * 0.375 + i * 62, MODE_LABEL[choice], () => this.chooseMode(choice), 190, 52);
+      this.modeBtns.set(choice, b);
+    });
+    // 押せないボタンの理由をここに出す（ボタン名を長くすると枠からはみ出すため）
+    this.modeHintLabel = label(this, W * 0.905, H * 0.375 + 3 * 62 + 40, "", 12, "#64748b");
+
     // ホスト操作: bot・モード
     if (net.isHost) {
       // 上段: bot の増減とモード
       this.botBtns.push(button(this, W * 0.16, H * 0.72, "bot追加", () => this.addBot(), 250, 52));
       this.botBtns.push(button(this, W * 0.42, H * 0.72, "bot削除", () => this.removeBot(), 250, 52));
       this.botBtns.push(button(this, W * 0.68, H * 0.72, "チーム分け入替", () => this.rotate(), 250, 52));
-      this.modeBtn = button(this, W * 0.9, H * 0.72, "モード", () => this.toggleMode(), 200, 52);
       // 裁定44: 下段は「対象のbotを選ぶ → Lv とキャラを個別に切り替える」
       // 裁定48: 対象は一覧の名前を押して選ぶ。ボタンは Lv とキャラだけ
       this.botHintLabel = label(this, W * 0.19, H * 0.815, "", 17, "#64748b");
@@ -188,16 +209,30 @@ export class LobbyScene extends Phaser.Scene {
     this.broadcastLobby();
   }
 
-  private toggleMode(): void {
-    const n = this.roster().length;
-    if (n !== 4 && n !== 6) return;
-    if (n === 6) this.mode = "teams"; // 6人は3v3のみ（乱闘は3〜4人まで）
-    // 裁定49: 4人のときは 乱闘 → 2vs2 → ボス戦 の順に回す。
-    // ボス戦は「最後の1人がボス」なので、ボスはbotである必要がある
-    else if (this.mode === "ffa") this.mode = "teams";
-    else if (this.mode === "teams" && this.bossPossible()) this.mode = "boss";
-    else this.mode = "ffa";
+  /** 裁定54: ボタンで直接そのモードにする。選べない組み合わせは押せないので、ここへは来ない */
+  private chooseMode(choice: ModeChoice): void {
+    if (!session.net.isHost || !this.modeAvailable(choice)) return;
+    this.mode = choice === "boss" ? "boss" : choice === "ffa" ? "ffa" : "teams";
     this.broadcastLobby();
+  }
+
+  /**
+   * そのモードが今の人数で成立するか（裁定54）。
+   * 2vs2 と 3v3 は内部的に同じ teams なので、人数だけが違い。
+   */
+  private modeAvailable(choice: ModeChoice): boolean {
+    const n = this.roster().length;
+    if (choice === "ffa") return n >= 2 && n <= 4;
+    if (choice === "duo") return n === 4;
+    if (choice === "trio") return n === 6;
+    return this.bossPossible();
+  }
+
+  /** いま選ばれているモードを、画面の4択に翻訳する（裁定54） */
+  private currentChoice(): ModeChoice {
+    if (this.mode === "boss") return "boss";
+    if (this.mode === "teams") return this.roster().length === 6 ? "trio" : "duo";
+    return "ffa";
   }
 
   /** 裁定49: ボス戦にできるか（4人ちょうどで、一覧の最後がbot） */
@@ -225,6 +260,8 @@ export class LobbyScene extends Phaser.Scene {
     const roster = this.roster();
     if (roster.length === 6) this.mode = "teams";
     if (this.mode === "boss" && !this.bossPossible()) this.mode = "ffa";
+    // 裁定54: 人数が変わって今のモードが成立しなくなったら乱闘へ戻す
+    if (!this.modeAvailable(this.currentChoice())) this.mode = "ffa";
     const boss = this.mode === "boss";
     const teams = boss || (this.mode === "teams" && (roster.length === 4 || roster.length === 6));
     const half = Math.ceil(roster.length / 2);
@@ -280,12 +317,23 @@ export class LobbyScene extends Phaser.Scene {
     this.startBtn.setText(
       session.net.isHost ? (n < 2 ? "相手を待っています…" : n === 5 ? "5人は不可（botで6人に）" : `開始（${modeName}）`) : "ホストの開始待ち",
     );
-    if (this.modeBtn) {
-      this.modeBtn.setEnabled(session.net.isHost && n === 4);
-      this.modeBtn.setText(
-        `モード: ${n === 6 ? "3v3" : this.mode === "boss" ? "ボス戦" : this.mode === "teams" ? "2vs2" : "乱闘"}`,
-      );
+    // 裁定54: 4つのボタンの「選択中」と「押せるか」を更新する。
+    // ボス戦だけは理由が分かりにくいので、押せないときに条件を出す
+    const choice = this.currentChoice();
+    for (const [c, b] of this.modeBtns) {
+      const ok = this.modeAvailable(c);
+      b.setSelected(c === choice && ok);
+      b.setEnabled(session.net.isHost && ok);
     }
+    // 押せない理由を出す。ボス戦だけは条件が分かりにくいので優先して説明する
+    const hint = !session.net.isHost
+      ? "ホストが選びます"
+      : !this.bossPossible() && n === 4
+        ? "ボス戦は一覧の最後がbotのとき"
+        : n === 4 || n === 6
+          ? ""
+          : "2vs2は4人・3v3は6人・ボス戦は4人";
+    this.modeHintLabel?.setText(hint);
   }
 
   private start(): void {

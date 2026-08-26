@@ -99,6 +99,8 @@ export interface PlayerState {
   knockbackT: number;
   /** ボスの範囲ノックバックのCD残り秒 */
   knockbackCd: number;
+  /** ボスの扇状射撃のCD残り秒（裁定53） */
+  fanCd: number;
   /** 近接を出したのが副武器（右クリック）か。表示と武器判定に使う */
   swingSub: boolean;
   /** ビルドウォールを構えている（裁定21）。ゲージは構え開始時に消費済み */

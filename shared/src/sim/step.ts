@@ -1,4 +1,4 @@
-import { BALANCE, moveSpeedOf, shieldMaxOf, type CharClass } from "../balance";
+import { BALANCE, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
 import type {
   BulletKind,
   BulletState,
@@ -94,6 +94,7 @@ export function createPlayer(id: PlayerId, name: string, cls: CharClass, slot: n
     swingPass: -1,
     knockbackT: 0,
     knockbackCd: 0,
+    fanCd: 0,
     swingSub: false,
     wallAiming: false,
     slamT: 0,
@@ -310,7 +311,7 @@ function gainShield(p: PlayerState, amount: number): void {
 
 // ---------------- 弾生成 ----------------
 function spawnBullet(state: SimState, p: PlayerState, kind: BulletKind, angle: number, speed: number, damage: number, radius: number, normal: boolean, reflects: number): BulletState {
-  const muzzle = P.radius + radius + 2;
+  const muzzle = radiusOf(p) + radius + 2;
   const x = p.x + Math.cos(angle) * muzzle;
   const y = p.y + Math.sin(angle) * muzzle;
   const b: BulletState = {
@@ -528,10 +529,13 @@ function relAngle(p: PlayerState, target: PlayerState, reach: number): { da: num
   // そこへさらに相手の半径を足したものが、体が触れる最大の中心間距離。
   // 裁定42: 以前は相手の半径を足しておらず、刃先が相手の体に重なっていても
   // 中心に届かなければ当たらなかった（見えている刃の先端2割強が空振り）。
-  if (d > reach + P.radius * 2) return null;
+  // 裁定53: 自分と相手それぞれの半径を使う（ボスは体が大きい）
+  const rSelf = radiusOf(p);
+  const rTarget = radiusOf(target);
+  if (d > reach + rSelf + rTarget) return null;
   const da = normalizeAngle(Math.atan2(dy, dx) - p.aim);
-  // 距離dから見た半径P.radiusの見込み角。密着時は広く、先端では狭くなる
-  const half = d <= P.radius ? Math.PI : Math.asin(Math.min(1, P.radius / d));
+  // 距離dから見た相手の見込み角。密着時は広く、先端では狭くなる
+  const half = d <= rTarget ? Math.PI : Math.asin(Math.min(1, rTarget / d));
   return { da, half };
 }
 
@@ -658,12 +662,12 @@ function onKill(state: SimState, target: PlayerState, attacker: PlayerState | un
 }
 
 // ---------------- スキル ----------------
-function pathBlockedByWall(state: SimState, x1: number, y1: number, x2: number, y2: number, team?: number): number | null {
+function pathBlockedByWall(state: SimState, x1: number, y1: number, x2: number, y2: number, team?: number, bodyRadius: number = P.radius): number | null {
   let minS: number | null = null;
   for (const w of state.walls) {
     if (w.breach && team !== undefined && w.ownerTeam === team) continue; // ブリーチ壁は味方すり抜け可
     const hit = segSegClosest(x1, y1, x2, y2, w.x1, w.y1, w.x2, w.y2);
-    if (hit.d <= BALANCE.heavySkills.wall.thickness / 2 + P.radius) {
+    if (hit.d <= BALANCE.heavySkills.wall.thickness / 2 + bodyRadius) {
       if (minS === null || hit.s < minS) minS = hit.s;
     }
   }
@@ -798,8 +802,9 @@ function useSkill(state: SimState, p: PlayerState, index: 0 | 1 | 2, input: Play
         ty = p.y + (ty - p.y) * s;
       }
       const fromX = p.x, fromY = p.y;
-      p.x = Math.min(F.width - P.radius, Math.max(P.radius, tx));
-      p.y = Math.min(F.height - P.radius, Math.max(P.radius, ty));
+      const rDash = radiusOf(p);
+      p.x = Math.min(F.width - rDash, Math.max(rDash, tx));
+      p.y = Math.min(F.height - rDash, Math.max(rDash, ty));
       p.dashFreeUntil = state.t + BALANCE.turnLock.dashExemptSeconds;
       events.push({ type: "sonic", owner: p.id, fromX, fromY, x: p.x, y: p.y });
       recordSkill(state, p, "dash", null);
@@ -847,7 +852,7 @@ function useSkill(state: SimState, p: PlayerState, index: 0 | 1 | 2, input: Play
         if (best) {
           const d = Math.hypot(best.x - p.x, best.y - p.y);
           dir = Math.atan2(best.y - p.y, best.x - p.x);
-          dist = Math.min(BALANCE.teams.cover.dashMax, Math.max(0, d - P.radius * 2 - BALANCE.teams.cover.arriveGap));
+          dist = Math.min(BALANCE.teams.cover.dashMax, Math.max(0, d - radiusOf(p) - radiusOf(best) - BALANCE.teams.cover.arriveGap));
           shellSec = BALANCE.teams.cover.shellSeconds;
         }
       }
@@ -859,8 +864,9 @@ function useSkill(state: SimState, p: PlayerState, index: 0 | 1 | 2, input: Play
         tx = p.x + (tx - p.x) * s;
         ty = p.y + (ty - p.y) * s;
       }
-      p.x = Math.min(F.width - P.radius, Math.max(P.radius, tx));
-      p.y = Math.min(F.height - P.radius, Math.max(P.radius, ty));
+      const rDash = radiusOf(p);
+      p.x = Math.min(F.width - rDash, Math.max(rDash, tx));
+      p.y = Math.min(F.height - rDash, Math.max(rDash, ty));
       p.shell = shellSec;
     }
   } else {
@@ -1033,7 +1039,7 @@ function resolveBulletPlayerHit(state: SimState, b: BulletState, target: PlayerS
   }
   if (target.invuln > 0) return;
 
-  const center = perp <= P.radius * P.centerHitRatio;
+  const center = perp <= radiusOf(target) * P.centerHitRatio;
   let dmg = b.damage * b.boost;
   if (b.kind === "pistol") dmg *= falloffMultiplier(Math.hypot(hitX - b.ox, hitY - b.oy));
   if (center) dmg *= P.centerHitMultiplier;
@@ -1108,6 +1114,38 @@ function respawnPlayer(state: SimState, p: PlayerState, events: SimEvent[]): voi
 }
 
 /**
+ * ボスの扇状射撃（裁定53）。
+ * ボスは入力を持たない（bot専用）ので、CDが明けたらシミュレーション側で自動的に撒く。
+ * 低ダメージ・低速・大きめの弾なので、隙間を抜けて避けられるのが狙い。通常弾なので剣で消せる。
+ */
+function stepBossFan(state: SimState, dt: number, events: SimEvent[]): void {
+  if (state.mode !== "boss") return;
+  const FAN = BALANCE.boss.fan;
+  for (const p of state.players) {
+    if (!p.boss || !isAlive(p)) continue;
+    if (p.fanCd > 0) {
+      p.fanCd = Math.max(0, p.fanCd - dt);
+      continue;
+    }
+    // のけぞり中とノックバックの溜め中は撃たない（溜めの予告を潰さないため）
+    if (p.cc > 0 || p.knockbackT > 0) continue;
+    // 生きている敵がいないなら撃たない
+    if (!state.players.some((t) => t.team !== p.team && isAlive(t))) continue;
+
+    const n = Math.max(1, FAN.count);
+    // 端から端まで spreadRad。奇数なら正面にも1発飛ぶ
+    const step0 = n === 1 ? 0 : FAN.spreadRad / (n - 1);
+    const start = p.aim - FAN.spreadRad / 2;
+    for (let i = 0; i < n; i++) {
+      const angle = start + step0 * i;
+      const b = spawnBullet(state, p, "hmg", angle, FAN.speed, FAN.damage, FAN.radius, true, 0);
+      events.push({ type: "shoot", owner: p.id, x: b.x, y: b.y, kind: "hmg" });
+    }
+    p.fanCd = FAN.cooldown;
+  }
+}
+
+/**
  * ボスの範囲ノックバック（裁定49）。
  * ボスは入力を持たない（bot専用）ので、囲まれた条件を満たしたらシミュレーション側で自動的に溜めを始める。
  * 溜め中は範囲が見えるので、見てから逃げれば避けられる。
@@ -1135,8 +1173,9 @@ function stepBossKnockback(state: SimState, dt: number, events: SimEvent[]): voi
         const uy = d < 1 ? Math.sin(p.aim) : dy / d;
         // 近いほど強く飛ぶ
         const power = K.distance * (1 - (d / K.radius) * 0.5);
-        t.x = Math.min(Math.max(P.radius, t.x + ux * power), F.width - P.radius);
-        t.y = Math.min(Math.max(P.radius, t.y + uy * power), F.height - P.radius);
+        const rt = radiusOf(t);
+        t.x = Math.min(Math.max(rt, t.x + ux * power), F.width - rt);
+        t.y = Math.min(Math.max(rt, t.y + uy * power), F.height - rt);
         applyCC(t, K.stunSeconds);
         const result = applyDamage(t, K.damage, p);
         t.lastDamagedAt = state.t;
@@ -1475,15 +1514,16 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     for (const w of state.walls) {
       if (w.breach && w.ownerTeam === p.team) continue; // ブリーチ壁は味方すり抜け可
       const c = closestPointOnSegment(w.x1, w.y1, w.x2, w.y2, p.x, p.y);
-      const minDist = BALANCE.heavySkills.wall.thickness / 2 + P.radius;
+      const minDist = BALANCE.heavySkills.wall.thickness / 2 + radiusOf(p);
       if (c.d < minDist && c.d > 1e-6) {
         const push = (minDist - c.d) / c.d;
         p.x += (p.x - c.x) * push;
         p.y += (p.y - c.y) * push;
       }
     }
-    p.x = Math.min(F.width - P.radius, Math.max(P.radius, p.x));
-    p.y = Math.min(F.height - P.radius, Math.max(P.radius, p.y));
+    const rSelf = radiusOf(p);
+    p.x = Math.min(F.width - rSelf, Math.max(rSelf, p.x));
+    p.y = Math.min(F.height - rSelf, Math.max(rSelf, p.y));
 
     p.prevFire = input.fire;
     p.prevFire2 = input.fire2;
@@ -1567,7 +1607,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     if (b.kind === "bell") {
       const t = b.homingId ? state.players.find((q) => q.id === b.homingId) : undefined;
       if (!t || !isAlive(t)) continue; // 対象が消えたら弾も消える
-      if (Math.hypot(b.x - t.x, b.y - t.y) <= P.radius + b.radius) {
+      if (Math.hypot(b.x - t.x, b.y - t.y) <= radiusOf(t) + b.radius) {
         applyBulletproof(t, b.owner, events);
         continue;
       }
@@ -1607,7 +1647,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       if (b.kind !== "heal" && target.team === b.ownerTeam) continue; // フレンドリーファイアなし
       if (b.kind === "heal" && target.team === b.ownerTeam && target.hp >= P.hp) continue; // 満タンには吸着も命中もしない
       const c = closestPointOnSegment(px, py, b.x, b.y, target.x, target.y);
-      if (c.d <= P.radius + b.radius) {
+      if (c.d <= radiusOf(target) + b.radius) {
         const speed = Math.hypot(b.vx, b.vy) || 1;
         const perp = Math.abs((target.x - px) * b.vy - (target.y - py) * b.vx) / speed;
         if (!earliest || c.t < earliest.s) earliest = { s: c.t, kind: "player", player: target, x: c.x, y: c.y, perp };
@@ -1662,6 +1702,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
   state.walls = state.walls.filter((w) => w.hp > 0);
 
   stepBossKnockback(state, dt, events);
+  stepBossFan(state, dt, events);
   stepZone(state, dt, events);
   checkMatchEnd(state, events);
   return { state, events };

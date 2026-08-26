@@ -3,6 +3,7 @@ import {
   BALANCE,
   type CharClass,
   moveSpeedOf,
+  radiusOf,
   botInput,
   createBotMemory,
   createMatch,
@@ -430,8 +431,9 @@ export class GameScene extends Phaser.Scene {
         const speed = locked ? 0 : moveSpeedOf(meAuth.cls);
         this.predicted.x += mx * speed * dt;
         this.predicted.y += my * speed * dt;
-        this.predicted.x = Phaser.Math.Clamp(this.predicted.x, P.radius, F.width - P.radius);
-        this.predicted.y = Phaser.Math.Clamp(this.predicted.y, P.radius, F.height - P.radius);
+        const rMe = radiusOf(meAuth);
+        this.predicted.x = Phaser.Math.Clamp(this.predicted.x, rMe, F.width - rMe);
+        this.predicted.y = Phaser.Math.Clamp(this.predicted.y, rMe, F.height - rMe);
         // 権威位置へ毎フレーム少しずつ吸着（ずれの発散防止）
         this.predicted.x = Phaser.Math.Linear(this.predicted.x, meAuth.x, 0.12);
         this.predicted.y = Phaser.Math.Linear(this.predicted.y, meAuth.y, 0.12);
@@ -1280,7 +1282,7 @@ export class GameScene extends Phaser.Scene {
       const meState = this.state.players.find((q) => q.id === this.me);
       const allied = p.id === this.me || (meState ? p.team === meState.team : false);
       name?.setColor(allied ? "#93c5fd" : "#fca5a5");
-      name?.setVisible(true).setPosition(x, y - P.radius - 28);
+      name?.setVisible(true).setPosition(x, y - radiusOf(p) - 28);
       this.drawPlayer(g, p, x, y);
     }
 
@@ -1400,7 +1402,8 @@ export class GameScene extends Phaser.Scene {
     const teamColor = allied ? COLORS.ally : COLORS.enemy;
     const flashing = (this.flashUntil.get(p.id) ?? 0) > this.time.now;
     const bodyColor = flashing ? 0xffffff : (CLASS_COLOR[p.cls] ?? COLORS.speed);
-    const r = P.radius;
+    // 裁定53: ボスは体が大きい。当たり判定と必ず同じ値を使う
+    const r = radiusOf(p);
     const danger =
       this.state.mode === "teams" || this.state.mode === "boss" ? (this.state.teamLives[p.team] ?? 9) <= 1 : p.lives <= 1;
     const dangerBlink = danger && Math.floor(this.time.now / 220) % 2 === 0;

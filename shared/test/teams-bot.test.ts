@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BALANCE } from "../src/balance";
+import { radiusOf } from "../src/balance";
 import { botInput, createBotMemory } from "../src/sim/bot";
 import { createMatch as createMatchRaw, isAlive, step } from "../src/sim/step";
 import type { PlayerInput, SimEvent, SimState } from "../src/sim/types";
@@ -352,5 +353,51 @@ describe("ボス戦（裁定49）", () => {
     s.players[3]!.x = a1.x - 40; s.players[3]!.y = a1.y;
     const r = run(s, {}, 2);
     expect(r.events.some((e) => e.type === "knockback" || e.type === "knockbackWindup")).toBe(false);
+  });
+  it("ボスは扇状に弾を撒き、CDが明けるまで撃ち直さない（裁定53）", () => {
+    const s = bossMatch();
+    const FAN = BALANCE.boss.fan;
+    // 弾が壁や敵に当たらないよう、挑戦者は遠くへ離しておく
+    for (const p of s.players.filter((q) => q.team === 0)) { p.x = 60; p.y = 60; }
+    const boss = s.players.find((p) => p.id === "boss")!;
+    boss.aim = 0;
+    const r1 = run(s, {}, 1 / 60);
+    expect(r1.state.bullets).toHaveLength(FAN.count);
+    // 端から端まで spreadRad ぶんに広がっている
+    const angles = r1.state.bullets.map((b) => Math.atan2(b.vy, b.vx)).sort((a, b) => a - b);
+    expect(angles[angles.length - 1]! - angles[0]!).toBeCloseTo(FAN.spreadRad, 5);
+    // 通常弾（剣で消せる）で、低ダメージ
+    expect(r1.state.bullets.every((b) => b.normal)).toBe(true);
+    expect(r1.state.bullets[0]!.damage).toBe(FAN.damage);
+    // CD中は撃たない
+    const before = r1.state.bullets.length;
+    const r2 = run(r1.state, {}, FAN.cooldown - 0.2);
+    expect(r2.state.bullets.filter((b) => b.owner === "boss").length).toBeLessThanOrEqual(before);
+  });
+
+  it("ボス戦以外では扇状射撃は起きない（裁定53）", () => {
+    const s = teamsMatch();
+    const r = run(s, {}, 3);
+    expect(r.state.bullets).toHaveLength(0);
+  });
+
+  it("ボスは体が大きく、その半径で弾が当たる（裁定53）", () => {
+    const s = bossMatch();
+    const boss = s.players.find((p) => p.id === "boss")!;
+    expect(radiusOf(boss)).toBeCloseTo(BALANCE.player.radius * BALANCE.boss.radiusMultiplier);
+    expect(radiusOf(s.players[0]!)).toBeCloseTo(BALANCE.player.radius);
+
+    // 普通のキャラの半径より外、ボスの半径より内を通る弾は当たる（見た目と判定が一致する）
+    const offset = (BALANCE.player.radius + radiusOf(boss)) / 2;
+    s.bullets.push({
+      id: 9001, kind: "pistol", owner: "p1", ownerTeam: 0,
+      x: boss.x - 60, y: boss.y + offset,
+      vx: 600, vy: 0, ox: boss.x - 60, oy: boss.y + offset,
+      damage: 10, radius: 1, normal: true, reflectsLeft: 0, boost: 1, mist: false,
+    });
+    const hpBefore = boss.hp;
+    const r = run(s, {}, 0.4);
+    const after = r.state.players.find((p) => p.id === "boss")!;
+    expect(after.hp).toBeLessThan(hpBefore);
   });
 });

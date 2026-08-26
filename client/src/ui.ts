@@ -18,24 +18,30 @@ export interface Button {
   container: Phaser.GameObjects.Container;
   setEnabled(v: boolean): void;
   setText(t: string): void;
+  /** 裁定54: 「いま選ばれている」状態（トグル群で使う）。押せる／押せないとは別軸 */
+  setSelected(v: boolean): void;
 }
 
 export function button(scene: Phaser.Scene, x: number, y: number, text: string, onClick: () => void, w = 320, h = 56): Button {
   const g = scene.add.graphics();
-  const draw = (hover: boolean, enabled: boolean) => {
+  let enabled = true;
+  let selected = false;
+  const draw = (hover: boolean) => {
     g.clear();
-    g.lineStyle(2, enabled ? (hover ? 0x67e8f9 : 0x22d3ee) : 0x334155, 1);
-    g.fillStyle(enabled ? (hover ? 0x0e2a3a : 0x0b1a26) : 0x0b0f17, 1);
+    // 選択中は「押せない」より優先して見せる（選ばれているのに灰色、を防ぐ）
+    const line = selected ? 0xfef08a : enabled ? (hover ? 0x67e8f9 : 0x22d3ee) : 0x334155;
+    const fill = selected ? 0x2a2410 : enabled ? (hover ? 0x0e2a3a : 0x0b1a26) : 0x0b0f17;
+    g.lineStyle(selected ? 3 : 2, line, 1);
+    g.fillStyle(fill, 1);
     g.fillRoundedRect(-w / 2, -h / 2, w, h, 10);
     g.strokeRoundedRect(-w / 2, -h / 2, w, h, 10);
   };
   const t = scene.add.text(0, 0, text, { fontFamily: FONT, fontSize: "22px", color: COLORS.text }).setOrigin(0.5);
   const c = scene.add.container(x, y, [g, t]);
-  let enabled = true;
-  draw(false, enabled);
+  draw(false);
   c.setSize(w, h).setInteractive({ useHandCursor: true });
-  c.on("pointerover", () => draw(true, enabled));
-  c.on("pointerout", () => draw(false, enabled));
+  c.on("pointerover", () => draw(true));
+  c.on("pointerout", () => draw(false));
   c.on("pointerdown", () => {
     if (enabled) onClick();
   });
@@ -43,11 +49,17 @@ export function button(scene: Phaser.Scene, x: number, y: number, text: string, 
     container: c,
     setEnabled(v: boolean) {
       enabled = v;
-      t.setAlpha(v ? 1 : 0.4);
-      draw(false, enabled);
+      t.setAlpha(v || selected ? 1 : 0.4);
+      draw(false);
     },
     setText(s: string) {
       t.setText(s);
+    },
+    setSelected(v: boolean) {
+      selected = v;
+      t.setColor(v ? "#fef08a" : COLORS.text);
+      t.setAlpha(enabled || selected ? 1 : 0.4);
+      draw(false);
     },
   };
 }
