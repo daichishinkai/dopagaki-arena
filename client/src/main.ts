@@ -7,6 +7,12 @@ import { LobbyScene } from "./scenes/LobbyScene";
 import { GameScene } from "./scenes/GameScene";
 import { ResultScene } from "./scenes/ResultScene";
 import { CharacterScene } from "./scenes/CharacterScene";
+import { installErrorOverlay } from "./errors";
+
+// フレーム処理で例外が漏れるとPhaserの描画ループが止まり、
+// 「押しても固まったまま」になる。原因を画面に出して必ず抜け出せるようにする
+installErrorOverlay();
+
 
 // 右クリック＝副武器（裁定10）なので、ブラウザのコンテキストメニューを抑止する
 window.addEventListener("contextmenu", (e) => e.preventDefault());

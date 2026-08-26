@@ -24,6 +24,7 @@ import { bindShort, isMouseBind, loadBinds, mouseMaskOf, type BindAction } from 
 import { COLORS, session } from "../session";
 import { BGM, SFX } from "../sound";
 import { button, FONT, label } from "../ui";
+import { reportError } from "../errors";
 
 const F = BALANCE.field;
 const P = BALANCE.player;
@@ -205,18 +206,26 @@ export class GameScene extends Phaser.Scene {
   private openMenu(): void {
     if (this.menuOpen) return;
     const solo = session.mode === "solo";
+    // シーン切替中の例外でループが止まると「押しても固まる」になるため、各操作を包む
+    const safe = (fn: () => void) => () => {
+      try {
+        fn();
+      } catch (e) {
+        reportError(e, "ESCメニュー");
+      }
+    };
     const items: Array<[string, () => void]> = solo
       ? [
-          ["リセット", () => { this.closeMenu(); this.resetPractice(); }],
-          ["ゲージ全快", () => { this.closeMenu(); this.refillGauges(); }],
-          ["キー設定", () => { this.closeMenu(); this.openSettings(); }],
-          ["対戦に戻る", () => this.closeMenu()],
-          ["ホームに戻る", () => { this.closeMenu(); this.scene.start("title"); }],
+          ["リセット", safe(() => { this.closeMenu(); this.resetPractice(); })],
+          ["ゲージ全快", safe(() => { this.closeMenu(); this.refillGauges(); })],
+          ["キー設定", safe(() => { this.closeMenu(); this.openSettings(); })],
+          ["対戦に戻る", safe(() => this.closeMenu())],
+          ["ホームに戻る", safe(() => { this.closeMenu(); this.scene.start("title"); })],
         ]
       : [
           // 対戦中はシーンを離れると同期が切れるため、キー設定はタイトルからのみ
-          ["対戦に戻る", () => this.closeMenu()],
-          ["ホームに戻る", () => { this.closeMenu(); this.leave("マッチから退出しました"); }],
+          ["対戦に戻る", safe(() => this.closeMenu())],
+          ["ホームに戻る", safe(() => { this.closeMenu(); this.leave("マッチから退出しました"); })],
         ];
 
     const h = 62 * items.length + 56;
@@ -291,8 +300,25 @@ export class GameScene extends Phaser.Scene {
     this.scene.start("title");
   }
 
-  update(_time: number, deltaMs: number): void {
+  /**
+   * 毎フレーム。tick() の例外がここより外へ漏れるとPhaserの描画ループが止まり、
+   * 画面が固まって全操作が効かなくなる（裁定34）。1フレームぶんの不具合で
+   * ゲーム全体をブリックさせないため、ここで受け止めて画面に出す。
+   */
+  update(time: number, deltaMs: number): void {
+    try {
+      this.tick(time, deltaMs);
+    } catch (e) {
+      reportError(e, "GameScene.update");
+    }
+  }
+
+  private tick(_time: number, deltaMs: number): void {
     const dt = Math.min(0.1, deltaMs / 1000);
+    // 裁定34: 訓練場ではメニューを開いている間シミュレーションを止める。
+    // 対戦中は相手が動いているので止めない（オンラインは同期が崩れる）
+    if (this.menuOpen && session.mode === "solo") return;
+
     if (this.isHost) {
       this.lagWindow.push(deltaMs);
       if (this.lagWindow.length > 60) this.lagWindow.shift();
