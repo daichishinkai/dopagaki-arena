@@ -194,7 +194,12 @@ export const BALANCE = {
     /** ソニック（旧・高速移動）。裁定24: 距離をキャラ0.8体分ぶん延長 */
     dash: { cost: 35, distanceRatio: ratio(0.12) + (0.8 * 24 * 2) / 1280 },
     /** クラウド（旧・スモーク）。裁定24: 中で動けるよう半径2倍 */
-    smoke: { cost: 30, radius: px(180), seconds: 4 /* 裁定46: 2→4 */ },
+    /**
+     * クラウド。裁定59で「草むら方式」の視界遮断を実装した。
+     * revealMs: 攻撃した敵がクラウド越しに見える時間（ミリ秒）。
+     * 撃ちながら完全に消えると、どこから撃たれたか分からず対処できないため。
+     */
+    smoke: { cost: 30, radius: px(180), seconds: 4 /* 裁定46: 2→4 */, revealMs: 700 },
     overload: { cooldown: 10, shots: 2, damageMultiplier: 3, expireSeconds: 4 },
   },
 

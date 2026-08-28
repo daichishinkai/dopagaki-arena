@@ -4,6 +4,7 @@ import type { GameMessage } from "@pvp/shared";
 import { session } from "../session";
 import { button, FONT, label, title } from "../ui";
 import { applyView, VIEW } from "../viewport";
+import { loadPresets, PRESET_COUNT, savePresets, type PresetStore } from "../roomPrefs";
 
 const CLASS_NAME: Record<CharClass, string> = { speed: "スピード", heavy: "タンク", support: "サポート" };
 
@@ -51,6 +52,10 @@ export class LobbyScene extends Phaser.Scene {
   private rot = 0;
   /** 裁定44: Lv/キャラを編集する対象のbot（bots配列の添字） */
   private botSel = 0;
+  /** 裁定60: ルーム設定のプリセット3枠 */
+  private presets: PresetStore = { slot: 0, slots: [null, null, null] };
+  private presetBtns: ReturnType<typeof button>[] = [];
+  private presetHint?: Phaser.GameObjects.Text;
 
   constructor() {
     super("lobby");
@@ -69,6 +74,11 @@ export class LobbyScene extends Phaser.Scene {
     this.mode = "ffa";
     this.rot = 0;
     this.botBtns = [];
+    // 裁定57/60: 前回の卓の形を復元する。bot構成とモードはホストのものなので、ホストのときだけ戻す。
+    // 自分のキャラは誰でも復元してよい（session.myCls 経由で下の pick() が使う）
+    this.presets = loadPresets();
+    this.presetBtns = [];
+    this.applyPreset(this.presets.slot, net.isHost);
 
     title(this, W / 2, H * 0.08, "ロビー", 40);
     const codeText = this.add
@@ -94,6 +104,14 @@ export class LobbyScene extends Phaser.Scene {
 
     // 裁定54: モードは右側の縦4つから直接選ぶ。ホスト以外も「いま何が選ばれているか」が見える
     this.modeBtns.clear();
+    // 裁定60: プリセット3枠。モードの列と左右対称に置く
+    label(this, W * 0.095, H * 0.315, "プリセット", 15, "#94a3b8");
+    for (let i = 0; i < PRESET_COUNT; i++) {
+      const b = button(this, W * 0.095, H * 0.375 + i * 62, `枠${i + 1}`, () => this.selectPreset(i), 190, 52);
+      this.presetBtns.push(b);
+    }
+    this.presetHint = label(this, W * 0.095, H * 0.375 + 2 * 62 + 46, "", 12, "#64748b");
+
     label(this, W * 0.905, H * 0.315, "モード", 15, "#94a3b8");
     MODE_ORDER.forEach((choice, i) => {
       const y = H * 0.375 + i * 62;
@@ -289,6 +307,42 @@ export class LobbyScene extends Phaser.Scene {
     return `${cond}${extra}\n${now} → 遊べます`;
   }
 
+  /**
+   * 裁定60: 枠の中身を今のロビーに反映する。
+   * 中身が空の枠は「今の卓のまま」にして、以後そこへ保存する（＝別名保存として使える）。
+   */
+  private applyPreset(slot: number, isHost: boolean): void {
+    this.presets.slot = slot;
+    const p = this.presets.slots[slot];
+    if (!p) return;
+    session.myCls = p.cls;
+    if (!isHost) return; // bot構成とモードはホストの持ち物
+    this.bots = p.bots.map((b) => ({ ...b }));
+    this.mode = p.mode;
+    this.rot = p.rot;
+  }
+
+  /** 枠を切り替える。今の卓は切り替える前の枠に保存済みなので、押しても失われない */
+  private selectPreset(slot: number): void {
+    if (!session.net.isHost) return;
+    this.persist();
+    this.applyPreset(slot, true);
+    this.pick(session.myCls);
+    this.broadcastLobby();
+  }
+
+  /** 裁定57/60: いま選んでいる枠へ書き戻す */
+  private persist(): void {
+    if (!session.net.isHost) return;
+    this.presets.slots[this.presets.slot] = {
+      bots: this.bots.map((b) => ({ ...b })),
+      mode: this.mode,
+      rot: this.rot,
+      cls: session.myCls,
+    };
+    savePresets(this.presets);
+  }
+
   /** 裁定54: ボタンで直接そのモードにする。選べない組み合わせは押せないので、ここへは来ない */
   private chooseMode(choice: ModeChoice): void {
     if (!session.net.isHost || !this.modeAvailable(choice)) return;
@@ -324,12 +378,16 @@ export class LobbyScene extends Phaser.Scene {
   }
 
   private broadcastLobby(): void {
+    // 裁定57: ホストが卓をいじるたびに保存する（明示的な「保存」操作を要らなくする）
+    this.persist();
     session.net.sendGame({ type: "lobby", bots: this.bots, mode: this.mode, rot: this.rot });
     this.refresh();
   }
 
   private pick(cls: CharClass, silent = false): void {
     session.myCls = cls;
+    // 裁定57: キャラの選択も覚える
+    this.persist();
     this.picks.set(session.net.you, cls);
     for (const [c, b] of this.clsBtns) b.setEnabled(c !== cls);
     if (!silent) session.net.sendGame({ type: "pick", cls });
@@ -397,6 +455,17 @@ export class LobbyScene extends Phaser.Scene {
     this.startBtn.setText(
       session.net.isHost ? (n < 2 ? "相手を待っています…" : n === 5 ? "5人は不可（botで6人に）" : `開始（${modeName}）`) : "ホストの開始待ち",
     );
+    // 裁定60: プリセット枠の表示。中身がある枠は構成を要約して出す
+    this.presetBtns.forEach((b, i) => {
+      const pr = this.presets.slots[i];
+      b.setSelected(i === this.presets.slot);
+      b.setEnabled(session.net.isHost);
+      b.setText(pr ? `枠${i + 1}（bot${pr.bots.length}）` : `枠${i + 1}（空）`);
+    });
+    this.presetHint?.setText(
+      !session.net.isHost ? "ホストの設定が使われます" : "選ぶと即切替。変更は自動で保存されます",
+    );
+
     // 裁定54: 4つのボタンの「選択中」と「押せるか」を更新する。
     // ボス戦だけは理由が分かりにくいので、押せないときに条件を出す
     const choice = this.currentChoice();

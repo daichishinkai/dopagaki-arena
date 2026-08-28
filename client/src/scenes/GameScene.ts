@@ -893,9 +893,19 @@ export class GameScene extends Phaser.Scene {
     return { from: from.state, to: to.state, alpha };
   }
 
+  /** 裁定59: このIDは「いつまで見えるか」。攻撃した敵をクラウド越しに一瞬だけ暴く */
+  private revealUntil = new Map<string, number>();
+
   private applyEvents(events: SimEvent[]): void {
     if (this.isHost && session.mode === "online") this.pendingEvents.push(...events);
     for (const e of events) {
+      // 裁定59: 攻撃した本人はクラウド越しでも一瞬見える。
+      // 撃ちながら完全に消えると、どこから撃たれたか分からず対処のしようがないため
+      if (e.type === "shoot" || e.type === "swing") {
+        this.revealUntil.set(e.owner, this.time.now + BALANCE.speedSkills.smoke.revealMs);
+      } else if (e.type === "hit") {
+        this.revealUntil.set(e.attacker, this.time.now + BALANCE.speedSkills.smoke.revealMs);
+      }
       switch (e.type) {
         case "countdown": {
           SFX.shoot(); // 短いビープ代わり
@@ -1125,6 +1135,32 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: this.banner, alpha: 0, delay: 900, duration: 400 });
   }
 
+  /**
+   * 裁定59: クラウド（草むら方式）で見えなくなるか。
+   *
+   * ルール:
+   * - **味方と自分は常に見える**（クラウドは今までどおり透ける）
+   * - 敵がクラウドの中にいると見えない
+   * - **同じクラウドに自分も入っていれば見える**（踏み込んで暴くのが対処法）
+   * - 攻撃した直後は見える（撃ちながら完全に消えるのは理不尽なため）
+   *
+   * 注意: これはクライアント側の描画だけの処理。中継サーバーは全員に同じ状態を配っているので、
+   * クライアントを改造すれば透視できる。身内で遊ぶ前提の割り切り。
+   */
+  private concealed(p: SimState["players"][number], me: SimState["players"][number] | undefined, st: SimState): boolean {
+    if (!me || p.id === me.id) return false;
+    if (p.team === me.team) return false; // 味方は常に見える
+    if ((this.revealUntil.get(p.id) ?? 0) > this.time.now) return false; // 攻撃直後
+    let inSmoke = false;
+    for (const sm of st.smokes) {
+      if (Math.hypot(p.x - sm.x, p.y - sm.y) > sm.radius) continue;
+      inSmoke = true;
+      // 同じクラウドに自分も入っているなら見える
+      if (Math.hypot(me.x - sm.x, me.y - sm.y) <= sm.radius) return false;
+    }
+    return inSmoke;
+  }
+
   private drawBackground(): void {
     const g = this.add.graphics();
     g.lineStyle(1, COLORS.grid, 1);
@@ -1288,6 +1324,11 @@ export class GameScene extends Phaser.Scene {
       // 裁定43-C: 名前の文字色もチーム色にする（遠くの識別を助ける）
       const meState = this.state.players.find((q) => q.id === this.me);
       const allied = p.id === this.me || (meState ? p.team === meState.team : false);
+      // 裁定59: クラウドに隠れた敵は描かない。味方は今までどおり透けて見える
+      if (this.concealed(p, meState, to)) {
+        name?.setVisible(false);
+        continue;
+      }
       name?.setColor(allied ? "#93c5fd" : "#fca5a5");
       name?.setVisible(true).setPosition(x, y - radiusOf(p) - 28);
       this.drawPlayer(g, p, x, y);

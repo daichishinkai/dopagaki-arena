@@ -391,3 +391,13 @@ describe("乱闘（3人）", () => {
     expect(state.result?.winner).toBe("a");
   });
 });
+
+describe("クラウド（裁定59）", () => {
+  it("視界遮断に必要な値が揃っている", () => {
+    const sm = BALANCE.speedSkills.smoke;
+    expect(sm.radius).toBeGreaterThan(0);
+    expect(sm.seconds).toBeGreaterThan(0);
+    // 攻撃した相手を暴く時間。0だと撃ちながら完全に消えてしまう
+    expect(sm.revealMs).toBeGreaterThan(0);
+  });
+});

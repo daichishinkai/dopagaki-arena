@@ -53,7 +53,7 @@ export class ResultScene extends Phaser.Scene {
 
     const isHost = session.mode === "solo" || session.net.isHost;
     const contLabel = session.mode === "solo" ? "続ける" : isHost ? "再戦" : "ホストの再戦待ち…";
-    const rematch = button(this, W / 2 - 180, H * 0.78, contLabel, () => {
+    const rematch = button(this, W / 2 - 260, H * 0.78, contLabel, () => {
       if (session.mode === "solo") {
         this.scene.start("game");
         return;
@@ -72,7 +72,22 @@ export class ResultScene extends Phaser.Scene {
       this.scene.start("game");
     });
     rematch.setEnabled(isHost);
-    button(this, W / 2 + 180, H * 0.78, "ホームに戻る", () => {
+
+    // 裁定58: ルームに戻る。卓を組み直したい（bot構成・モード・キャラを変えたい）ときの導線。
+    // ソロにはルームが無いのでキャラ選択へ戻す
+    const backLabel = session.mode === "solo" ? "キャラ選択へ" : "ルームに戻る";
+    const back = button(this, W / 2, H * 0.78, backLabel, () => {
+      if (session.mode === "solo") {
+        this.scene.start("character");
+        return;
+      }
+      // ホストがロビーへ戻ると、ロビーが lobby メッセージを撒くのでゲストも追従する（下の購読）
+      this.scene.start("lobby");
+    });
+    // ゲストが勝手に抜けるとホストの再戦に乗れなくなるので、オンラインではホストだけが動かせる
+    back.setEnabled(session.mode === "solo" || session.net.isHost);
+
+    button(this, W / 2 + 260, H * 0.78, "ホームに戻る", () => {
       if (session.mode === "online") session.net.disconnect();
       this.scene.start("title");
     });
@@ -84,6 +99,12 @@ export class ResultScene extends Phaser.Scene {
           if (payload.type !== "start") return;
           session.players = payload.players;
           this.scene.start("game");
+        }),
+        // 裁定58: ホストがロビーへ戻ると lobby メッセージが飛んでくるので、ゲストも一緒に戻る。
+        // 通信の種類を増やさずに済むよう、既存の lobby メッセージを合図として使う
+        net.on<{ payload: GameMessage }>("game:lobby", ({ payload }) => {
+          if (payload.type !== "lobby") return;
+          this.scene.start("lobby");
         }),
         net.on("hostLeft", () => {
           this.registry.set("message", "ホストが退出しました");
