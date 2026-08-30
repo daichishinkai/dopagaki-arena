@@ -40,7 +40,7 @@ export const session = {
   practiceFoe: 0,
   lastResult: null as MatchResult | null,
   /** リザルト称号用の試合統計 */
-  lastStats: null as { linkCount: number; maxLinkDamage: number; players: { id: PlayerId; name: string; team: number; kills: number; deaths: number; damageDealt: number }[] } | null,
+  lastStats: null as { linkCount: number; maxLinkDamage: number; elapsed: number; players: { id: PlayerId; name: string; team: number; kills: number; deaths: number; damageDealt: number }[] } | null,
   relayUrl: (import.meta.env.VITE_RELAY_URL as string | undefined) ?? "ws://localhost:8080",
   /** タッチ操作（裁定40）。タイトルで切替 */
   touch: loadTouchPref(),

@@ -26,9 +26,9 @@ export class TitleScene extends Phaser.Scene {
     const status = label(this, W / 2, 610, msg, 18, "#f87171");
 
     // ---- 左パネル: フレンド対戦 ----
-    panel(this, 330, 385, 480, 350, "フレンド対戦");
+    panel(this, 215, 385, 390, 350, "フレンド対戦");
 
-    button(this, 330, 300, "ルームを作る", () =>
+    button(this, 215, 300, "ルームを作る", () =>
       this.withNet(status, () => {
         session.mode = "online";
         const off = session.net.on("created", () => {
@@ -43,14 +43,14 @@ export class TitleScene extends Phaser.Scene {
     const boxW = 320;
     const box = this.add.graphics();
     box.lineStyle(2, 0x22d3ee, 1).fillStyle(0x0b1a26, 1);
-    box.fillRoundedRect(330 - boxW / 2, 390 - 28, boxW, 56, 10);
-    box.strokeRoundedRect(330 - boxW / 2, 390 - 28, boxW, 56, 10);
+    box.fillRoundedRect(215 - boxW / 2, 390 - 28, boxW, 56, 10);
+    box.strokeRoundedRect(215 - boxW / 2, 390 - 28, boxW, 56, 10);
     this.codeText = this.add
-      .text(330, 390, "", { fontFamily: "monospace", fontSize: "28px", color: "#e5e7eb" })
+      .text(215, 390, "", { fontFamily: "monospace", fontSize: "28px", color: "#e5e7eb" })
       .setOrigin(0.5)
       .setLetterSpacing(8);
     this.drawCode();
-    label(this, 330, 432, "キー入力でコードを打てます", 13, "#64748b");
+    label(this, 215, 432, "キー入力でコードを打てます", 13, "#64748b");
 
     const join = () => {
       if (this.code.length !== 6) {
@@ -73,7 +73,7 @@ export class TitleScene extends Phaser.Scene {
       });
     };
 
-    button(this, 330, 480, "コードで参加", join);
+    button(this, 215, 480, "コードで参加", join);
 
     this.input.keyboard!.on("keydown", (ev: KeyboardEvent) => {
       if (ev.key === "Backspace") {
@@ -87,22 +87,48 @@ export class TitleScene extends Phaser.Scene {
       }
     });
 
+    // ---- 中央パネル: 弾幕モード（裁定64・裁定65で独立） ----
+    panel(this, 640, 385, 390, 350, "弾幕モード");
+    // 砲台とリング弾のイメージ
+    const art = this.add.graphics();
+    art.fillStyle(0xef4444, 0.85).fillCircle(640, 320, 22);
+    art.lineStyle(2, 0xfca5a5, 1).strokeCircle(640, 320, 22);
+    for (let i = 0; i < 12; i++) {
+      const a = (Math.PI * 2 * i) / 12;
+      art.fillStyle(0xa5f3fc, 0.9).fillCircle(640 + Math.cos(a) * 58, 320 + Math.sin(a) * 58, 5);
+    }
+    art.fillStyle(0x22e5ff, 1).fillCircle(700, 372, 9);
+    art.fillStyle(0xffffff, 1).fillCircle(700, 372, 3);
+    label(this, 640, 405, "スピード限定・ひとり用", 15, "#e5e7eb");
+    label(this, 640, 428, "中央の砲台の弾幕を避けながら削る", 13, "#94a3b8");
+    label(this, 640, 448, `残機${BALANCE.danmaku.playerLives}・制限時間${Math.round(BALANCE.danmaku.seconds / 60)}分・剣で弾を消せる`, 13, "#94a3b8");
+    button(this, 640, 500, "挑戦する", () => {
+      session.mode = "solo";
+      session.players = [
+        { id: "me", name: session.name, cls: "speed", team: 0 },
+        { id: "turret", name: "砲台", cls: "heavy", team: 1 },
+      ];
+      session.matchMode = "danmaku";
+      session.bots = [];
+      this.scene.start("game");
+    }, 300, 52);
+
     // ---- 右パネル: トレーニング ----
-    panel(this, 950, 385, 480, 350, "トレーニング");
+    panel(this, 1065, 385, 390, 350, "トレーニング");
 
     const CLASS_NAME = { speed: "スピード", heavy: "タンク", support: "サポート" } as const;
     const order = ["speed", "heavy", "support"] as const;
-    const clsBtn = button(this, 950, 300, `キャラ: ${CLASS_NAME[session.myCls]}`, () => {
+    const clsBtn = button(this, 1065, 300, `キャラ: ${CLASS_NAME[session.myCls]}`, () => {
       const i = order.indexOf(session.myCls);
       session.myCls = order[(i + 1) % order.length]!;
       clsBtn.setText(`キャラ: ${CLASS_NAME[session.myCls]}`);
     });
     const foeNames = ["的", "bot Lv1", "bot Lv2", "bot Lv3"];
-    const foeBtn = button(this, 950, 390, `相手: ${foeNames[session.practiceFoe]}`, () => {
+    const foeBtn = button(this, 1065, 390, `相手: ${foeNames[session.practiceFoe]}`, () => {
       session.practiceFoe = (session.practiceFoe + 1) % 4;
       foeBtn.setText(`相手: ${foeNames[session.practiceFoe]}`);
     });
-    button(this, 950, 480, "練習開始", () => {
+    button(this, 1065, 480, "練習開始", () => {
       session.mode = "solo";
       const foes = ["的", "bot Lv1", "bot Lv2", "bot Lv3"] as const;
       const foe = foes[session.practiceFoe]!;
@@ -123,10 +149,10 @@ export class TitleScene extends Phaser.Scene {
     });
 
     // キャラ説明: アイコンを押すと各キャラの説明画面へ
-    label(this, 950, 528, "キャラクター解説", 14, "#7dd3fc");
+    label(this, 1065, 528, "キャラクター解説", 14, "#7dd3fc");
     const CLASS_COLOR = { speed: 0x22d3ee, heavy: 0xfb923c, support: 0xa3e635 } as const;
     order.forEach((c, i) => {
-      const ix = 950 + (i - 1) * 96;
+      const ix = 1065 + (i - 1) * 96;
       const g = this.add.graphics();
       g.fillStyle(CLASS_COLOR[c], 0.75).fillCircle(ix, 570, 30);
       g.lineStyle(2, CLASS_COLOR[c], 1).strokeCircle(ix, 570, 30);

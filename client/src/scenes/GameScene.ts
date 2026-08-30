@@ -1,5 +1,7 @@
 import Phaser from "phaser";
 import {
+  bossMaxHpOf,
+  canSee,
   BALANCE,
   type CharClass,
   moveSpeedOf,
@@ -111,7 +113,8 @@ export class GameScene extends Phaser.Scene {
     applyView(this);
     this.isHost = session.mode === "solo" || session.net.isHost;
     this.me = session.mode === "solo" ? "me" : session.net.you;
-    this.state = createMatch(session.players, session.matchMode, { practice: session.mode === "solo" });
+    // 裁定64: 弾幕モードはソロだが訓練場ではない（残機・制限時間・決着がある）
+    this.state = createMatch(session.players, session.matchMode, { practice: session.mode === "solo" && session.matchMode !== "danmaku" });
     this.botMems.clear();
     for (const b of session.bots) this.botMems.set(b.id, createBotMemory());
     this.inputs = {};
@@ -308,7 +311,7 @@ export class GameScene extends Phaser.Scene {
 
   /** 訓練場を初期状態へ戻す（裁定14: ゲージはゼロ・経過時間は扱わない） */
   private resetPractice(): void {
-    this.state = createMatch(session.players, session.matchMode === "ffa" ? "ffa" : "teams", { practice: true });
+    this.state = createMatch(session.players, session.matchMode === "ffa" ? "ffa" : session.matchMode === "danmaku" ? "danmaku" : "teams", { practice: session.matchMode !== "danmaku" });
     for (const p of this.state.players) {
       p.escapeGauge = 0;
       p.unifiedGauge = 0;
@@ -457,6 +460,7 @@ export class GameScene extends Phaser.Scene {
       session.lastStats = {
         linkCount: this.state.linkCount,
         maxLinkDamage: Math.round(this.state.maxLinkDamage),
+        elapsed: Math.round(this.state.t),
         players: this.state.players.map((p) => ({ id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths, damageDealt: Math.round(p.damageDealt) })),
       };
       this.showBanner("FINISH");
@@ -893,19 +897,9 @@ export class GameScene extends Phaser.Scene {
     return { from: from.state, to: to.state, alpha };
   }
 
-  /** 裁定59: このIDは「いつまで見えるか」。攻撃した敵をクラウド越しに一瞬だけ暴く */
-  private revealUntil = new Map<string, number>();
-
   private applyEvents(events: SimEvent[]): void {
     if (this.isHost && session.mode === "online") this.pendingEvents.push(...events);
     for (const e of events) {
-      // 裁定59: 攻撃した本人はクラウド越しでも一瞬見える。
-      // 撃ちながら完全に消えると、どこから撃たれたか分からず対処のしようがないため
-      if (e.type === "shoot" || e.type === "swing") {
-        this.revealUntil.set(e.owner, this.time.now + BALANCE.speedSkills.smoke.revealMs);
-      } else if (e.type === "hit") {
-        this.revealUntil.set(e.attacker, this.time.now + BALANCE.speedSkills.smoke.revealMs);
-      }
       switch (e.type) {
         case "countdown": {
           SFX.shoot(); // 短いビープ代わり
@@ -992,6 +986,18 @@ export class GameScene extends Phaser.Scene {
           this.notify("強敵が力を溜めている！", "#f87171");
           this.knockbackTelegraph(e.x, e.y, e.radius);
           SFX.guardBreak();
+          break;
+        }
+        case "bossPhase": {
+          // 裁定62: 形態移行。無敵で仕切り直し＋ノックバック溜めが合図
+          this.showBanner(`第${e.phase}形態`);
+          this.notify("強敵が姿を変えた！", "#fb923c");
+          if (!this.lowSpec) {
+            this.expandRing(e.x, e.y, 30, 10, 0xfb923c, 8, 500);
+            this.expandRing(e.x, e.y, 30, 6, 0xffffff, 3, 350);
+          }
+          SFX.bigHit();
+          this.shake = Math.max(this.shake, 10);
           break;
         }
         case "knockback": {
@@ -1144,21 +1150,12 @@ export class GameScene extends Phaser.Scene {
    * - **同じクラウドに自分も入っていれば見える**（踏み込んで暴くのが対処法）
    * - 攻撃した直後は見える（撃ちながら完全に消えるのは理不尽なため）
    *
-   * 注意: これはクライアント側の描画だけの処理。中継サーバーは全員に同じ状態を配っているので、
-   * クライアントを改造すれば透視できる。身内で遊ぶ前提の割り切り。
+   * 注意: 中継サーバーは全員に同じ状態を配っているので、クライアントを改造すれば透視できる。身内で遊ぶ前提の割り切り。
+   * 裁定61: 判定本体は shared/sim/vision.ts の canSee()。botも同じ関数で索敵する。
    */
   private concealed(p: SimState["players"][number], me: SimState["players"][number] | undefined, st: SimState): boolean {
-    if (!me || p.id === me.id) return false;
-    if (p.team === me.team) return false; // 味方は常に見える
-    if ((this.revealUntil.get(p.id) ?? 0) > this.time.now) return false; // 攻撃直後
-    let inSmoke = false;
-    for (const sm of st.smokes) {
-      if (Math.hypot(p.x - sm.x, p.y - sm.y) > sm.radius) continue;
-      inSmoke = true;
-      // 同じクラウドに自分も入っているなら見える
-      if (Math.hypot(me.x - sm.x, me.y - sm.y) <= sm.radius) return false;
-    }
-    return inSmoke;
+    if (!me) return false;
+    return !canSee(st, me, p); // 裁定61: 判定は shared に一本化（botと同じ）
   }
 
   private drawBackground(): void {
@@ -1332,6 +1329,11 @@ export class GameScene extends Phaser.Scene {
       name?.setColor(allied ? "#93c5fd" : "#fca5a5");
       name?.setVisible(true).setPosition(x, y - radiusOf(p) - 28);
       this.drawPlayer(g, p, x, y);
+      // 裁定64: 弾幕モードは弾に対する当たり判定が小さい。どこが本体かを白い点で見せる（東方式）
+      if (to.mode === "danmaku" && !p.boss) {
+        g.fillStyle(0xffffff, 1).fillCircle(x, y, BALANCE.danmaku.hitRadius);
+        g.lineStyle(1, 0xf87171, 0.9).strokeCircle(x, y, BALANCE.danmaku.hitRadius + 2);
+      }
     }
 
     const fromBullets = new Map(from.bullets.map((b) => [b.id, b]));
@@ -1352,7 +1354,7 @@ export class GameScene extends Phaser.Scene {
     const me = to.players.find((p) => p.id === this.me);
     const tl = Math.ceil(to.timeLeft);
     // 訓練場に制限時間の概念はないので時計を出さない（裁定14）
-    const clock = session.mode === "solo" ? "訓練場" : `${Math.floor(tl / 60)}:${String(tl % 60).padStart(2, "0")}`;
+    const clock = session.mode === "solo" && to.mode !== "danmaku" ? "訓練場" : `${Math.floor(tl / 60)}:${String(tl % 60).padStart(2, "0")}`;
     if ((to.mode === "teams" || to.mode === "boss") && me) {
       const myPool = to.teamLives[me.team] ?? 0;
       const foeTeam = Object.keys(to.teamLives).map(Number).find((t) => t !== me.team);
@@ -1366,15 +1368,16 @@ export class GameScene extends Phaser.Scene {
         to.mode === "boss" ? `残機 ${stock(myPool)}   ${clock}` : `味方 ${stock(myPool)}   ${clock}   敵 ${stock(foePool)}`,
       );
     } else {
-      const others = to.players.filter((p) => p.id !== this.me);
-      const fmt = (p: PlayerState) => `${p.name} ${"◆".repeat(Math.max(0, p.lives))}${"◇".repeat(Math.max(0, P.lives - p.lives))}`;
+      const others = to.players.filter((p) => p.id !== this.me && !(to.mode === "danmaku" && p.boss));
+      const maxLives = to.mode === "danmaku" ? BALANCE.danmaku.playerLives : P.lives;
+      const fmt = (p: PlayerState) => `${p.name} ${"◆".repeat(Math.max(0, p.lives))}${"◇".repeat(Math.max(0, maxLives - p.lives))}`;
       this.hud.setText(`${me ? fmt(me) : ""}   ${clock}   ${others.map(fmt).join("  ")}`);
     }
     // 裁定49: ボスのHPを画面上部に大きく出す（頭上の小バーだけでは6倍のHPの残量が読めない）
-    if (to.mode === "boss") {
+    if (to.mode === "boss" || to.mode === "danmaku") {
       const boss = to.players.find((p) => p.boss);
       if (boss && isAlive(boss)) {
-        const maxHp = P.hp * BALANCE.boss.hpMultiplier;
+        const maxHp = bossMaxHpOf(to.mode);
         const ratio = Phaser.Math.Clamp(boss.hp / maxHp, 0, 1);
         const bw = F.width * 0.5;
         const bx = F.width / 2 - bw / 2;
@@ -1387,9 +1390,14 @@ export class GameScene extends Phaser.Scene {
         g.fillRect(bx, by, bw, 14);
         g.fillStyle(ratio > 0.35 ? 0xef4444 : 0xfb923c, 1);
         g.fillRect(bx, by, bw * ratio, 14);
+        // 裁定62: 形態の閾値を目盛りで見せる（次の仕切り直しがいつ来るか読めるように）
+        g.lineStyle(2, 0xfde68a, 0.9);
+        const marks = to.mode === "danmaku" ? BALANCE.danmaku.phases.slice(1) : BALANCE.boss.phases;
+        for (const ph of marks) g.lineBetween(bx + bw * ph.hpBelow, by - 3, bx + bw * ph.hpBelow, by + 17);
         g.lineStyle(2, 0xfca5a5, 0.9);
         g.strokeRect(bx, by, bw, 14);
-        this.bossName.setText(`${boss.name}   ${Math.ceil(boss.hp)} / ${maxHp}`).setVisible(true);
+        const phaseLabel = boss.bossPhase > 1 ? `  第${boss.bossPhase}形態` : "";
+        this.bossName.setText(`${boss.name}${phaseLabel}   ${Math.ceil(boss.hp)} / ${maxHp}`).setVisible(true);
       } else {
         this.bossGfx.clear();
         this.bossName.setVisible(false);

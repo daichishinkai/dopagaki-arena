@@ -7,6 +7,7 @@ import { BALANCE, type CharClass } from "../balance";
 import type { PlayerId, PlayerInput, PlayerState, SimState } from "./types";
 import { NULL_INPUT } from "./types";
 import { isAlive, WEAPONS } from "./step";
+import { canSee } from "./vision";
 
 export type BotLevel = 1 | 2 | 3;
 
@@ -22,10 +23,12 @@ export interface BotMemory {
   healAllyId: PlayerId | null;
   /** ボス（裁定49）: 次に狙いを引き直す時刻 */
   retargetAt: number;
+  /** 裁定61: 敵が全員クラウドに消えたときに向かう「最後に見た位置」 */
+  lastSeen: { x: number; y: number } | null;
 }
 
 export function createBotMemory(): BotMemory {
-  return { lastThink: -Infinity, aim: 0, targetId: null, strafeDir: 1, strafeFlipAt: 0, desiredWeapon: 0, fire: false, retreat: false, healAllyId: null, retargetAt: 0 };
+  return { lastThink: -Infinity, aim: 0, targetId: null, strafeDir: 1, strafeFlipAt: 0, desiredWeapon: 0, fire: false, retreat: false, healAllyId: null, retargetAt: 0, lastSeen: null };
 }
 
 const RANGE: Record<CharClass, number[]> = {
@@ -51,7 +54,8 @@ function side(ax: number, ay: number, bx: number, by: number, px: number, py: nu
 }
 
 function pickTarget(state: SimState, me: PlayerState, level: BotLevel, mem?: BotMemory, rng: () => number = Math.random, t = 0): PlayerState | null {
-  const enemies = state.players.filter((p) => p.team !== me.team && isAlive(p));
+  // 裁定61: クラウドに隠れた敵は狙わない（プレイヤーと同じ可視判定）
+  const enemies = state.players.filter((p) => p.team !== me.team && isAlive(p) && canSee(state, me, p));
   if (enemies.length === 0) return null;
   if (me.boss && mem) {
     // 裁定49: ボスは一定時間ごとに「最も近い人」か「最もダメージを出している人」のどちらかを引き直す。
@@ -83,6 +87,7 @@ function think(state: SimState, me: PlayerState, mem: BotMemory, level: BotLevel
     mem.fire = false;
     return;
   }
+  mem.lastSeen = { x: target.x, y: target.y };
 
   // Lv3 支援: 負傷味方がいれば回復弾を優先
   if (level >= 3 && me.cls === "support") {
@@ -175,7 +180,15 @@ export function botInput(state: SimState, botId: PlayerId, level: BotLevel, mem:
 
   const aimAtId = mem.healAllyId ?? mem.targetId;
   const target = aimAtId ? state.players.find((p) => p.id === aimAtId) : null;
-  if (!target) return { ...NULL_INPUT, aim: mem.aim };
+  if (!target) {
+    // 裁定61: 見える敵がいない（クラウドに隠れた）なら、最後に見た位置へ歩いて暴きに行く。撃たない
+    const ls = mem.lastSeen;
+    if (ls && Math.hypot(ls.x - me.x, ls.y - me.y) > 24) {
+      const a = Math.atan2(ls.y - me.y, ls.x - me.x);
+      return { ...NULL_INPUT, aim: a, mx: Math.cos(a), my: Math.sin(a) };
+    }
+    return { ...NULL_INPUT, aim: mem.aim };
+  }
 
   // 距離管理: 得意距離へ寄せる。retreat中は離れる
   const ranges = RANGE[me.cls];

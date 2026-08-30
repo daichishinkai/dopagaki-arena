@@ -101,6 +101,10 @@ export interface PlayerState {
   knockbackCd: number;
   /** ボスの扇状射撃のCD残り秒（裁定53） */
   fanCd: number;
+  /** ボスの形態（裁定62）。1から始まり、HPが閾値を割るたびに上がる */
+  bossPhase: number;
+  /** 最後に攻撃した時刻（state.t基準・裁定61）。クラウドの「攻撃直後は見える」判定に使う */
+  lastAttackAt: number;
   /** 近接を出したのが副武器（右クリック）か。表示と武器判定に使う */
   swingSub: boolean;
   /** ビルドウォールを構えている（裁定21）。ゲージは構え開始時に消費済み */
@@ -219,7 +223,7 @@ export interface SmokeState {
 
 export type MatchPhase = "playing" | "ended";
 
-export type MatchMode = "ffa" | "teams" | "boss";
+export type MatchMode = "ffa" | "teams" | "boss" | "danmaku";
 
 export type LinkPair = "breach" | "lightning" | "slamStun" | "slamPotion";
 
@@ -274,6 +278,15 @@ export interface ZoneState {
   gauge: Record<number, number>;
 }
 
+/** 弾幕砲台のタイマー（裁定64） */
+export interface DanmakuState {
+  ringCd: number;
+  ringShots: number;
+  aimedCd: number;
+  spiralAngle: number;
+  spiralAcc: number;
+}
+
 export interface SimState {
   /** 開始カウントダウンの残り秒（裁定16）。>0 の間は全処理を止める */
   countdown: number;
@@ -286,6 +299,8 @@ export interface SimState {
   teamLives: Record<number, number>;
   /** 中央エリア（裁定45）。teams のみ、それ以外は null */
   zone: ZoneState | null;
+  /** 弾幕モードの砲台の内部状態（裁定64）。danmaku 以外は null */
+  danmaku: DanmakuState | null;
   timeLeft: number;
   /** 訓練場（裁定35）: 時間を進めず、残機を減らさず、撃破後は自動復活。試合は終わらない */
   practice?: boolean;
@@ -336,4 +351,6 @@ export type SimEvent =
   /** ボスの範囲ノックバック（裁定49）: 溜め開始と発動 */
   | { type: "knockbackWindup"; owner: PlayerId; x: number; y: number; radius: number }
   | { type: "knockback"; owner: PlayerId; x: number; y: number; radius: number }
+  /** ボスの形態移行（裁定62） */
+  | { type: "bossPhase"; owner: PlayerId; phase: number; x: number; y: number }
   | { type: "matchEnd"; result: MatchResult };

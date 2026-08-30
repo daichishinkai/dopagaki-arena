@@ -48,7 +48,7 @@ const STICK_R = 64;
 interface ButtonDef { id: TouchButtonId; dx: number; dy: number; x: number; y: number; r: number; color: number }
 
 const LAYOUT: ButtonDef[] = [
-  { id: "main", dx: -108, dy: -135, x: 0, y: 0, r: 60, color: 0x38bdf8 },
+  { id: "main", dx: -112, dy: -140, x: 0, y: 0, r: 72 /* 裁定63: 60→72 */, color: 0x38bdf8 },
   { id: "sub", dx: -218, dy: -65, x: 0, y: 0, r: 42, color: 0xa78bfa },
   { id: "guard", dx: -325, dy: -65, x: 0, y: 0, r: 42, color: 0xfbbf24 },
   { id: "skill1", dx: -98, dy: -268, x: 0, y: 0, r: 40, color: 0x4ade80 },

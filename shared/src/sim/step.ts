@@ -1,4 +1,4 @@
-import { BALANCE, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
+import { BALANCE, bossFanOf, bossKnockbackCooldownOf, bossMaxHpOf, bossPhaseOf, danmakuPhaseOf, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
 import type {
   BulletKind,
   BulletState,
@@ -95,6 +95,8 @@ export function createPlayer(id: PlayerId, name: string, cls: CharClass, slot: n
     knockbackT: 0,
     knockbackCd: 0,
     fanCd: 0,
+    bossPhase: 1,
+    lastAttackAt: -Infinity,
     swingSub: false,
     wallAiming: false,
     slamT: 0,
@@ -162,6 +164,21 @@ export function createMatch(
       created.x = F.width / 2;
       created.y = F.height / 2;
     }
+    if (mode === "danmaku") {
+      // 裁定64: 最後の1人が砲台（動かない・ボス扱い）。挑戦者はスピード固定・個人残機
+      if (i === players.length - 1) {
+        created.boss = true;
+        created.hp = bossMaxHpOf(mode);
+        created.shield = 0;
+        created.lives = 1;
+        created.x = F.width / 2;
+        created.y = F.height / 2;
+      } else {
+        created.cls = "speed";
+        created.shield = shieldMaxOf("speed");
+        created.lives = BALANCE.danmaku.playerLives;
+      }
+    }
     return created;
   });
   const teamLives: Record<number, number> = {};
@@ -190,7 +207,8 @@ export function createMatch(
             gauge: {},
           }
         : null,
-    timeLeft: BALANCE.matchSeconds,
+    timeLeft: mode === "danmaku" ? BALANCE.danmaku.seconds : BALANCE.matchSeconds,
+    danmaku: mode === "danmaku" ? { ringCd: 1.0, ringShots: 0, aimedCd: 1.5, spiralAngle: 0, spiralAcc: 0 } : null,
     practice: options.practice === true,
     players: ps,
     bullets: [],
@@ -656,7 +674,8 @@ function onKill(state: SimState, target: PlayerState, attacker: PlayerState | un
   }
   if (attacker) {
     attacker.kills += 1;
-    attacker.hp = Math.min(P.hp, attacker.hp + P.killHealHp);
+    // 裁定64: 弾幕モードの砲台は撃破回復しない（被弾＝砲台が回復、では削りが進まない）
+    if (!(state.mode === "danmaku" && attacker.boss)) attacker.hp = Math.min(P.hp, attacker.hp + P.killHealHp);
   }
   events.push({ type: "kill", target: target.id, attacker: attacker?.id ?? target.id });
 }
@@ -1064,6 +1083,11 @@ function resolveBulletPlayerHit(state: SimState, b: BulletState, target: PlayerS
 
 // ---------------- 判定 ----------------
 export function judgeTimeout(state: SimState): MatchResult {
+  if (state.mode === "danmaku") {
+    // 裁定64: 時間切れは砲台の勝ち（削り切れなかった）
+    const turret = state.players.find((p) => p.boss);
+    return { winner: turret?.id ?? null, winnerTeam: turret?.team ?? null, reason: "timeout-lives" };
+  }
   if (state.mode === "teams") {
     const teams = Object.keys(state.teamLives).map(Number);
     const score = (team: number) => ({
@@ -1120,9 +1144,9 @@ function respawnPlayer(state: SimState, p: PlayerState, events: SimEvent[]): voi
  */
 function stepBossFan(state: SimState, dt: number, events: SimEvent[]): void {
   if (state.mode !== "boss") return;
-  const FAN = BALANCE.boss.fan;
   for (const p of state.players) {
     if (!p.boss || !isAlive(p)) continue;
+    const FAN = bossFanOf(p.bossPhase); // 裁定62: 形態で発数と回転が変わる
     if (p.fanCd > 0) {
       p.fanCd = Math.max(0, p.fanCd - dt);
       continue;
@@ -1142,6 +1166,104 @@ function stepBossFan(state: SimState, dt: number, events: SimEvent[]): void {
       events.push({ type: "shoot", owner: p.id, x: b.x, y: b.y, kind: "hmg" });
     }
     p.fanCd = FAN.cooldown;
+  }
+}
+
+/** 弾に対する当たり判定の半径（裁定64: 弾幕モードの挑戦者は小さい）。壁・場外・近接は radiusOf() */
+export function bulletHitRadiusOf(state: SimState, p: PlayerState): number {
+  if (state.mode === "danmaku" && !p.boss) return BALANCE.danmaku.hitRadius;
+  return radiusOf(p);
+}
+
+/**
+ * 弾幕モードの砲台（裁定64）。入力を持たないのでシミュレーション側で自動的に撃つ。
+ * 形態（HP比率）ごとに リング／自機狙い／渦 を組み合わせる。すべて通常弾なので剣で消せる。
+ */
+function stepDanmaku(state: SimState, dt: number, events: SimEvent[]): void {
+  if (state.mode !== "danmaku" || !state.danmaku) return;
+  const D = BALANCE.danmaku;
+  const turret = state.players.find((p) => p.boss);
+  if (!turret || !isAlive(turret)) return;
+  const dm = state.danmaku;
+
+  // 形態移行: 無敵で仕切り直し＋（設定なら）砲台の弾を全消し
+  const next = danmakuPhaseOf(turret.hp / bossMaxHpOf(state.mode));
+  if (next > turret.bossPhase) {
+    turret.bossPhase = next;
+    turret.invuln = Math.max(turret.invuln, D.phaseInvulnSeconds);
+    if (D.clearBulletsOnPhase) state.bullets = state.bullets.filter((b) => b.owner !== turret.id);
+    dm.ringCd = Math.max(dm.ringCd, D.phaseInvulnSeconds);
+    dm.aimedCd = Math.max(dm.aimedCd, D.phaseInvulnSeconds);
+    events.push({ type: "bossPhase", owner: turret.id, phase: next, x: turret.x, y: turret.y });
+  }
+  const ph = D.phases[turret.bossPhase - 1] ?? D.phases[0]!;
+  const targets = state.players.filter((p) => !p.boss && isAlive(p));
+  const target = targets[0];
+  const fire = (angle: number, shot: { speed: number; damage: number; radius: number }) => {
+    const b = spawnBullet(state, turret, "hmg", angle, shot.speed, shot.damage, shot.radius, true, 0);
+    return b;
+  };
+
+  // リング: 撃つたびに半歩ずらす（隙間が固定されないように）
+  dm.ringCd -= dt;
+  if (dm.ringCd <= 0) {
+    const stepA = (Math.PI * 2) / ph.ring.count;
+    const offset = (dm.ringShots % 2) * (stepA / 2);
+    for (let i = 0; i < ph.ring.count; i++) fire(offset + stepA * i, ph.ring);
+    dm.ringShots += 1;
+    dm.ringCd = ph.ring.cooldown;
+    events.push({ type: "shoot", owner: turret.id, x: turret.x, y: turret.y, kind: "hmg" });
+  }
+
+  // 自機狙い: 生きている挑戦者がいるときだけ
+  dm.aimedCd -= dt;
+  if (dm.aimedCd <= 0 && target) {
+    const base = Math.atan2(target.y - turret.y, target.x - turret.x);
+    turret.aim = base;
+    const n = Math.max(1, ph.aimed.count);
+    const stepA = n === 1 ? 0 : ph.aimed.spreadRad / (n - 1);
+    const start = base - ph.aimed.spreadRad / 2;
+    for (let i = 0; i < n; i++) fire(start + stepA * i, ph.aimed);
+    dm.aimedCd = ph.aimed.cooldown;
+    events.push({ type: "shoot", owner: turret.id, x: turret.x, y: turret.y, kind: "hmg" });
+  }
+
+  // 渦: 回転する腕から連射
+  if (ph.spiral) {
+    const sp = ph.spiral;
+    dm.spiralAngle += sp.turnRadPerSecond * dt;
+    dm.spiralAcc += sp.shotsPerSecond * dt;
+    while (dm.spiralAcc >= 1) {
+      dm.spiralAcc -= 1;
+      for (let a = 0; a < sp.arms; a++) fire(dm.spiralAngle + (Math.PI * 2 * a) / sp.arms, sp);
+    }
+  } else {
+    dm.spiralAcc = 0;
+  }
+}
+
+/**
+ * ボスの形態移行（裁定62）。
+ * HPが閾値を割った瞬間に、無敵で仕切り直し＋即ノックバック溜め（合図）。
+ * 以降は扇状射撃の発数・回転とノックバックの回転が上がる。
+ * ボスは1体・HPは減る一方なので、形態は上がるだけで戻らない。
+ */
+function stepBossPhase(state: SimState, events: SimEvent[]): void {
+  if (state.mode !== "boss") return;
+  const B = BALANCE.boss;
+  for (const p of state.players) {
+    if (!p.boss || !isAlive(p)) continue;
+    const next = bossPhaseOf(p.hp / (BALANCE.player.hp * B.hpMultiplier));
+    if (next <= p.bossPhase) continue;
+    p.bossPhase = next;
+    p.invuln = Math.max(p.invuln, B.phaseShift.invulnSeconds);
+    p.cc = 0;
+    // 仕切り直しの合図: CDを無視して溜めを始める（溜めは見えるので逃げられる）
+    if (B.phaseShift.shockwave && p.knockbackT <= 0) {
+      p.knockbackT = B.knockback.windupSeconds;
+      events.push({ type: "knockbackWindup", owner: p.id, x: p.x, y: p.y, radius: B.knockback.radius });
+    }
+    events.push({ type: "bossPhase", owner: p.id, phase: next, x: p.x, y: p.y });
   }
 }
 
@@ -1182,7 +1304,7 @@ function stepBossKnockback(state: SimState, dt: number, events: SimEvent[]): voi
         p.damageDealt += result.total;
         events.push({ type: "hit", target: t.id, attacker: p.id, x: t.x, y: t.y, damage: result.total, center: false, guarded: false, melee: false, weapon: "link" });
       }
-      p.knockbackCd = K.cooldown;
+      p.knockbackCd = bossKnockbackCooldownOf(p.bossPhase); // 裁定62
       continue;
     }
 
@@ -1299,6 +1421,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     pendingLinks: [...prev.pendingLinks],
     linkWindows: prev.linkWindows.map((w) => ({ ...w })),
     zone: prev.zone ? { ...prev.zone, gauge: { ...prev.zone.gauge } } : null,
+    danmaku: prev.danmaku ? { ...prev.danmaku } : null,
   };
   const byId = new Map(state.players.map((p) => [p.id, p]));
 
@@ -1362,7 +1485,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       if (len > 1) { mx /= len; my /= len; }
       let speed = moveSpeedOf(p.cls);
       if (p.cls === "support" && p.chargeT > 0) speed *= BALANCE.sniper.moveMultiplierWhileCharging;
-      if (p.cls === "speed") {
+      if (p.cls === "speed" && !(state.mode === "danmaku" && BALANCE.danmaku.turnLockOff)) {
         const T = BALANCE.turnLock;
         if (len > 0.01) {
           const desired = Math.atan2(my, mx);
@@ -1647,7 +1770,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
       if (b.kind !== "heal" && target.team === b.ownerTeam) continue; // フレンドリーファイアなし
       if (b.kind === "heal" && target.team === b.ownerTeam && target.hp >= P.hp) continue; // 満タンには吸着も命中もしない
       const c = closestPointOnSegment(px, py, b.x, b.y, target.x, target.y);
-      if (c.d <= radiusOf(target) + b.radius) {
+      if (c.d <= bulletHitRadiusOf(state, target) + b.radius) {
         const speed = Math.hypot(b.vx, b.vy) || 1;
         const perp = Math.abs((target.x - px) * b.vy - (target.y - py) * b.vx) / speed;
         if (!earliest || c.t < earliest.s) earliest = { s: c.t, kind: "player", player: target, x: c.x, y: c.y, perp };
@@ -1701,9 +1824,19 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
   state.bullets = aliveBullets;
   state.walls = state.walls.filter((w) => w.hp > 0);
 
+  stepBossPhase(state, events);
   stepBossKnockback(state, dt, events);
   stepBossFan(state, dt, events);
+  stepDanmaku(state, dt, events);
   stepZone(state, dt, events);
   checkMatchEnd(state, events);
+
+  // 裁定61: 「攻撃した直後は見える」の根拠をシミュレーションに持つ（bot・描画で共通に使う）
+  for (const e of events) {
+    const id = e.type === "shoot" || e.type === "swing" ? e.owner : e.type === "hit" ? e.attacker : null;
+    if (id === null) continue;
+    const a = byId.get(id);
+    if (a) a.lastAttackAt = state.t;
+  }
   return { state, events };
 }

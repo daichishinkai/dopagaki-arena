@@ -15,6 +15,14 @@ const ratio = (n: number): number => n * WORLD_SCALE;
 /** 横断秒（速度の逆数）に適用 */
 const cross = (n: number): number => n / WORLD_SCALE;
 
+export interface DanmakuShot { count: number; cooldown: number; speed: number; damage: number; radius: number }
+export interface DanmakuPhase {
+  hpBelow: number;
+  ring: DanmakuShot;
+  aimed: DanmakuShot & { spreadRad: number };
+  spiral: { arms: number; shotsPerSecond: number; turnRadPerSecond: number; speed: number; damage: number; radius: number } | null;
+}
+
 export const BALANCE = {
   /** 論理フィールド寸法。「画面幅」の基準（距離減衰・高速移動の%はこの幅に対する割合） */
   field: { width: 1280, height: 720 },
@@ -70,6 +78,17 @@ export const BALANCE = {
       damage: 6,
       radius: px(11),
     },
+    /**
+     * 形態（裁定62・ユーザー決定「段階制」）。HP比率がこの値を下回ると次の形態へ。
+     * 配列の順に第2・第3形態。数値はすべて調整プレースホルダー。
+     * 注意: 形態が上がるほど強くなるので、試合時間は短くならない（単調さ対策であって時短ではない）。
+     */
+    phases: [
+      { hpBelow: 0.66, fan: { count: 7, cooldown: 1.8 }, knockbackCooldown: 6 },
+      { hpBelow: 0.33, fan: { count: 9, cooldown: 1.5 }, knockbackCooldown: 5 },
+    ],
+    /** 形態移行の演出（裁定62）: 無敵で仕切り直し＋CD無視のノックバック溜めを合図にする */
+    phaseShift: { invulnSeconds: 1.0, shockwave: true },
     /** 3人側のチーム共有残機 */
     playerLives: 7,
     /** 狙いの切り替え: この秒数ごとに「最も近い人」「最もダメージを出している人」のどちらかを引き直す */
@@ -88,6 +107,55 @@ export const BALANCE = {
       /** この人数以上に囲まれたら撃つ（bot判断用） */
       surroundedCount: 2,
     },
+  },
+
+  /**
+   * 弾幕モード（裁定64・ユーザー決定）: ソロ・スピード限定。中央の動かない砲台を、弾幕を避けながら削る。
+   * 数値はすべて調整プレースホルダー。
+   */
+  danmaku: {
+    /** 砲台のHP倍率（boss と別に持つ: 1人で削るので低め） */
+    hpMultiplier: 6,
+    /** 挑戦者の個人残機 */
+    playerLives: 3,
+    /** 制限時間（切れたら負け） */
+    seconds: 180,
+    /**
+     * 挑戦者の「弾に対する」当たり判定半径。東方式に小さくする。壁・場外・近接は通常の半径のまま。
+     * これが無いと密な弾幕をすり抜けられず即死ゲーになる。
+     */
+    hitRadius: px(7),
+    /** スピードの切り返し硬直（裁定36）を切る。硬直は弾幕避けと真っ向から衝突するため */
+    turnLockOff: true,
+    /** 形態移行時に砲台の弾を全消し（東方のスペルカード切替と同じ。仕切り直しの報酬） */
+    clearBulletsOnPhase: true,
+    phaseInvulnSeconds: 0.8,
+    /**
+     * 形態ごとの弾幕。配列の順に第1・第2・第3形態。HP比率が hpBelow を下回ると次へ。
+     * - ring: 全周に等間隔。撃つたびに半歩ずつずらして隙間を動かす
+     * - aimed: 自機狙いの扇（狙われる＝動けば当たらない）
+     * - spiral: 回転しながら連射する腕。null なら無し
+     */
+    phases: [
+      {
+        hpBelow: 1.01,
+        ring: { count: 16, cooldown: 1.6, speed: px(230), damage: 8, radius: px(9) },
+        aimed: { count: 3, spreadRad: (18 * Math.PI) / 180, cooldown: 1.1, speed: px(380), damage: 8, radius: px(7) },
+        spiral: null,
+      },
+      {
+        hpBelow: 0.66,
+        ring: { count: 20, cooldown: 1.3, speed: px(250), damage: 8, radius: px(9) },
+        aimed: { count: 3, spreadRad: (18 * Math.PI) / 180, cooldown: 0.9, speed: px(400), damage: 8, radius: px(7) },
+        spiral: { arms: 2, shotsPerSecond: 10, turnRadPerSecond: (80 * Math.PI) / 180, speed: px(220), damage: 6, radius: px(7) },
+      },
+      {
+        hpBelow: 0.33,
+        ring: { count: 24, cooldown: 1.0, speed: px(270), damage: 8, radius: px(9) },
+        aimed: { count: 5, spreadRad: (30 * Math.PI) / 180, cooldown: 0.8, speed: px(420), damage: 8, radius: px(7) },
+        spiral: { arms: 3, shotsPerSecond: 12, turnRadPerSecond: (110 * Math.PI) / 180, speed: px(230), damage: 6, radius: px(7) },
+      },
+    ] as ReadonlyArray<DanmakuPhase>,
   },
 
   /** 2vs2（SPEC 5.4 / 6.2） */
@@ -345,3 +413,33 @@ export function shieldMaxOf(cls: CharClass): number {
 
 /** 後方互換（標準=支援型相当の横断1.5秒） */
 export const MOVE_SPEED = (BALANCE.field.width / BALANCE.classes.support.crossSeconds) * BALANCE.moveSpeedMultiplier;
+
+/** ボスの形態番号（裁定62）。hpRatio は 0〜1 */
+export function bossPhaseOf(hpRatio: number): number {
+  let phase = 1;
+  for (const ph of BALANCE.boss.phases) if (hpRatio < ph.hpBelow) phase += 1;
+  return phase;
+}
+
+/** 形態に応じた扇状射撃の数値（裁定62）。未指定の項目は第1形態の値 */
+export interface BossFanParams { cooldown: number; count: number; spreadRad: number; speed: number; damage: number; radius: number }
+export function bossFanOf(phase: number): BossFanParams {
+  const over = BALANCE.boss.phases[phase - 2];
+  return over ? { ...BALANCE.boss.fan, ...over.fan } : BALANCE.boss.fan;
+}
+
+export function bossKnockbackCooldownOf(phase: number): number {
+  return BALANCE.boss.phases[phase - 2]?.knockbackCooldown ?? BALANCE.boss.knockback.cooldown;
+}
+
+/** ボス・砲台の最大HP（裁定64: モードで倍率が違う） */
+export function bossMaxHpOf(mode: string): number {
+  return BALANCE.player.hp * (mode === "danmaku" ? BALANCE.danmaku.hpMultiplier : BALANCE.boss.hpMultiplier);
+}
+
+/** 弾幕モードの形態番号（裁定64）。hpRatio は 0〜1 */
+export function danmakuPhaseOf(hpRatio: number): number {
+  let phase = 0;
+  BALANCE.danmaku.phases.forEach((ph, i) => { if (hpRatio < ph.hpBelow) phase = i + 1; });
+  return Math.max(1, phase);
+}

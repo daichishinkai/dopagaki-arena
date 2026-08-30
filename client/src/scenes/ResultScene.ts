@@ -47,12 +47,16 @@ export class ResultScene extends Phaser.Scene {
       else if (mine.deaths >= Math.max(...stats.players.map((p) => p.deaths)) && !won) honor = "不死身の挑戦者";
     }
     title(this, W / 2, H * 0.58, `称号：${honor}`, 24);
-    if (stats) {
+    if (stats && session.matchMode === "danmaku") {
+      // 裁定64: 弾幕モードはタイムと被弾数だけ
+      const m = Math.floor(stats.elapsed / 60), sec = stats.elapsed % 60;
+      label(this, W / 2, H * 0.66, `${outcome === "WIN" ? "クリアタイム" : "生存時間"} ${m}:${String(sec).padStart(2, "0")} ／ 与ダメ ${mine?.damageDealt ?? 0} ／ ${mine?.deaths ?? 0}ダウン`, 16, "#94a3b8");
+    } else if (stats) {
       label(this, W / 2, H * 0.66, `連携（LINK）${stats.linkCount}回・最大連携ダメージ ${stats.maxLinkDamage} ／ 与ダメ ${mine?.damageDealt ?? 0} ／ ${mine?.kills ?? 0}撃破 ${mine?.deaths ?? 0}ダウン`, 16, "#94a3b8");
     }
 
     const isHost = session.mode === "solo" || session.net.isHost;
-    const contLabel = session.mode === "solo" ? "続ける" : isHost ? "再戦" : "ホストの再戦待ち…";
+    const contLabel = session.mode === "solo" ? (session.matchMode === "danmaku" ? "もう一度" : "続ける") : isHost ? "再戦" : "ホストの再戦待ち…";
     const rematch = button(this, W / 2 - 260, H * 0.78, contLabel, () => {
       if (session.mode === "solo") {
         this.scene.start("game");
@@ -75,10 +79,10 @@ export class ResultScene extends Phaser.Scene {
 
     // 裁定58: ルームに戻る。卓を組み直したい（bot構成・モード・キャラを変えたい）ときの導線。
     // ソロにはルームが無いのでキャラ選択へ戻す
-    const backLabel = session.mode === "solo" ? "キャラ選択へ" : "ルームに戻る";
+    const backLabel = session.mode === "solo" ? (session.matchMode === "danmaku" ? "ホームに戻る" : "キャラ選択へ") : "ルームに戻る";
     const back = button(this, W / 2, H * 0.78, backLabel, () => {
       if (session.mode === "solo") {
-        this.scene.start("character");
+        this.scene.start(session.matchMode === "danmaku" ? "title" : "character");
         return;
       }
       // ホストがロビーへ戻ると、ロビーが lobby メッセージを撒くのでゲストも追従する（下の購読）
