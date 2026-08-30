@@ -131,15 +131,24 @@ function buildInfo(cls: CharClass): { role: string; tips: string[]; stats: Row[]
   };
 }
 
+type Tab = "basic" | "kit" | "links";
+const TABS: { id: Tab; label: string }[] = [
+  { id: "basic", label: "基礎・立ち回り" },
+  { id: "kit", label: "武器・スキル" },
+  { id: "links", label: "合体技" },
+];
+
 export class CharacterScene extends Phaser.Scene {
   private cls: CharClass = "speed";
+  private tab: Tab = "basic";
 
   constructor() {
     super("character");
   }
 
-  init(data: { cls?: CharClass }): void {
+  init(data: { cls?: CharClass; tab?: Tab }): void {
     this.cls = data?.cls ?? session.myCls;
+    this.tab = data?.tab ?? "basic";
   }
 
   create(): void {
@@ -148,73 +157,80 @@ export class CharacterScene extends Phaser.Scene {
     const info = buildInfo(this.cls);
     const accent = CLASS_COLOR[this.cls];
 
-    title(this, F.width / 2, 46, CLASS_NAME[this.cls], 40);
+    title(this, F.width / 2, 40, CLASS_NAME[this.cls], 36);
 
     // 上部のキャラアイコン（開いているものだけ薄暗い）
     ORDER.forEach((c, i) => {
-      const x = F.width / 2 + (i - 1) * 120;
+      const x = F.width / 2 + (i - 1) * 110;
       const active = c === this.cls;
       const g = this.add.graphics();
       g.fillStyle(CLASS_COLOR[c], active ? 0.18 : 0.75);
-      g.fillCircle(x, 112, 30);
+      g.fillCircle(x, 96, 26);
       g.lineStyle(2, CLASS_COLOR[c], active ? 0.5 : 1);
-      g.strokeCircle(x, 112, 30);
+      g.strokeCircle(x, 96, 26);
       this.add
-        .text(x, 112, CLASS_NAME[c], {
-          fontFamily: FONT,
-          fontSize: "12px",
-          color: active ? "#64748b" : "#0a1420",
-          fontStyle: "bold",
-        })
+        .text(x, 96, CLASS_NAME[c], { fontFamily: FONT, fontSize: "12px", color: active ? "#64748b" : "#0a1420", fontStyle: "bold" })
         .setOrigin(0.5);
-      const zone = this.add.zone(x, 112, 64, 64).setInteractive({ useHandCursor: true });
+      const zone = this.add.zone(x, 96, 60, 60).setInteractive({ useHandCursor: true });
       zone.on("pointerdown", () => {
         if (c === this.cls) return;
-        this.scene.restart({ cls: c });
+        this.scene.restart({ cls: c, tab: this.tab });
       });
     });
 
-    // 役割（手書き）
-    const roleBox = this.add.graphics();
-    roleBox.fillStyle(accent, 0.07);
-    roleBox.fillRoundedRect(60, 150, F.width - 120, 62, 10);
-    this.add
-      .text(F.width / 2, 181, info.role, {
-        fontFamily: FONT,
-        fontSize: "15px",
-        color: "#cbd5e1",
-        align: "center",
-        wordWrap: { width: F.width - 160 },
-      })
-      .setOrigin(0.5);
+    // 裁定68: タブ。1画面に収まらない文量なので3ページに分ける
+    TABS.forEach((t, i) => {
+      const x = F.width / 2 + (i - 1) * 250;
+      const b = button(this, x, 146, t.label, () => {
+        if (t.id === this.tab) return;
+        this.scene.restart({ cls: this.cls, tab: t.id });
+      }, 236, 40);
+      b.setSelected(t.id === this.tab);
+    });
 
-    // 左列: 基礎値＋武器
-    this.column(60, 228, 590, "基礎", info.stats);
-    this.column(60, 228 + 132, 590, "武器（裁定10: 左クリック＝主武器 / 右クリック＝副武器）", info.weapons);
+    const top = 184;
+    const colW = (F.width - 120 - 40) / 2; // 左右2列・間40
+    const rightX = 60 + colW + 40;
 
-    // 右列: スキル・パッシブ
-    this.column(F.width / 2 + 10, 228, 590, "スキル（E・R・F）", info.skills);
-    this.column(F.width / 2 + 10, 228 + 190, 590, "パッシブ", info.passive);
+    if (this.tab === "basic") {
+      const roleBox = this.add.graphics();
+      roleBox.fillStyle(accent, 0.07);
+      const roleText = this.add
+        .text(F.width / 2, top + 30, info.role, { fontFamily: FONT, fontSize: "15px", color: "#cbd5e1", align: "center", wordWrap: { width: F.width - 160 } })
+        .setOrigin(0.5);
+      roleBox.fillRoundedRect(60, top, F.width - 120, roleText.height + 24, 10);
+      roleText.setY(top + 12 + roleText.height / 2);
+      const y2 = top + roleText.height + 24 + 18;
+      this.column(60, y2, colW, "基礎", info.stats);
+      this.column(rightX, y2, colW, "立ち回り", info.tips.map((t) => ({ label: "・", value: t })));
+    } else if (this.tab === "kit") {
+      this.column(60, top, colW, "武器（左クリック＝主武器 / 右クリック＝副武器）", info.weapons);
+      const y2 = this.column(rightX, top, colW, "スキル（E・R・F）", info.skills);
+      this.column(rightX, y2 + 10, colW, "パッシブ", info.passive);
+    } else {
+      this.column(60, top, F.width - 120, "合体技（味方と合わせると発動するスキルリンク）", info.links.map((t) => ({ label: "・", value: t })));
+    }
 
-    // 下部: 立ち回りと合体技
-    this.column(60, 560, F.width - 120, "立ち回り", info.tips.map((t) => ({ label: "・", value: t })));
-    this.column(60, 560 + 100, F.width - 120, "合体技", info.links.map((t) => ({ label: "・", value: t })));
-
-    button(this, F.width / 2, F.height - 34, "戻る", () => this.scene.start("title"), 200, 44);
+    // 戻るは右上へ（下端を本文に使う）
+    button(this, F.width - 110, 40, "戻る", () => this.scene.start("title"), 160, 44);
   }
 
-  private column(x: number, y: number, w: number, heading: string, rows: Row[]): void {
+  /** セクションを描き、次のセクションを置けるY座標を返す（固定座標にすると折り返しで重なるため） */
+  private column(x: number, y: number, w: number, heading: string, rows: Row[]): number {
     this.add.text(x, y, heading, { fontFamily: FONT, fontSize: "15px", color: "#7dd3fc", fontStyle: "bold" });
-    let cy = y + 24;
+    let cy = y + 26;
     for (const r of rows) {
-      const lab = this.add.text(x, cy, r.label, { fontFamily: FONT, fontSize: "13px", color: "#fef08a" });
-      const val = this.add.text(x + (r.label === "・" ? 14 : 0), cy + (r.label === "・" ? 0 : 16), r.value, {
+      const bullet = r.label === "・";
+      const lab = this.add.text(x, cy, r.label, { fontFamily: FONT, fontSize: "14px", color: "#fef08a" });
+      const val = this.add.text(x + (bullet ? 16 : 0), cy + (bullet ? 0 : 18), r.value, {
         fontFamily: FONT,
-        fontSize: "13px",
+        fontSize: "14px",
         color: "#cbd5e1",
-        wordWrap: { width: w - (r.label === "・" ? 20 : 0) },
+        lineSpacing: 3,
+        wordWrap: { width: w - (bullet ? 20 : 0) },
       });
-      cy += (r.label === "・" ? 0 : lab.height) + val.height + 8;
+      cy += (bullet ? 0 : lab.height + 2) + val.height + 12;
     }
+    return cy;
   }
 }
