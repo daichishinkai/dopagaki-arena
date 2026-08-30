@@ -1075,8 +1075,15 @@ export class GameScene extends Phaser.Scene {
           if (e.target === this.me || this.isHost) SFX.guardBreak();
           break;
         case "kill": {
-          this.slowmo = KILL_SLOWMO_SECONDS;
           const pos = this.pos(e.target);
+          // 裁定72: 固定砲台のダウンは小さな爆発だけ。スロー・ズーム・撃破音は出さない（何度も起きるため）
+          if (this.stateFor(e.target)?.turret) {
+            if (!this.lowSpec) this.turretBreak(pos.x, pos.y);
+            this.shake = Math.max(this.shake, 4);
+            SFX.turretDown();
+            break;
+          }
+          this.slowmo = KILL_SLOWMO_SECONDS;
           if (!this.lowSpec) this.sparks(pos.x, pos.y);
           this.shake = Math.max(this.shake, 8);
           SFX.kill(e.attacker === this.me ? "mine" : e.target === this.me ? "me" : "other"); // 裁定37: 撃破音の3分岐
@@ -1131,6 +1138,22 @@ export class GameScene extends Phaser.Scene {
       const d = 60 + Math.random() * 80;
       const s = this.add.circle(x, y, 3 + Math.random() * 3, COLORS.speed).setBlendMode(Phaser.BlendModes.ADD);
       this.tweens.add({ targets: s, x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, alpha: 0, scale: 0.2, duration: 500 + Math.random() * 300, onComplete: () => s.destroy() });
+    }
+  }
+
+  /** 裁定72: 固定砲台のダウン。小さな閃光＋赤い破片が飛び散り、煙が立つ程度に抑える */
+  private turretBreak(x: number, y: number): void {
+    this.expandRing(x, y, 8, 5, 0xfca5a5, 3, 260, 0.35);
+    for (let i = 0; i < 10; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 30 + Math.random() * 50;
+      const w = 4 + Math.random() * 5;
+      const frag = this.add.rectangle(x, y, w, w * 0.6, i % 3 === 0 ? 0xfca5a5 : 0x7f1d1d).setAngle(Math.random() * 360);
+      this.tweens.add({ targets: frag, x: x + Math.cos(a) * d, y: y + Math.sin(a) * d + 18, angle: frag.angle + 180, alpha: 0, duration: 420 + Math.random() * 220, ease: "Quad.easeOut", onComplete: () => frag.destroy() });
+    }
+    for (let i = 0; i < 4; i++) {
+      const smoke = this.add.circle(x + (Math.random() - 0.5) * 16, y, 8 + Math.random() * 6, 0x475569, 0.5);
+      this.tweens.add({ targets: smoke, y: y - 30 - Math.random() * 20, scale: 2.2, alpha: 0, duration: 700 + Math.random() * 300, delay: i * 60, onComplete: () => smoke.destroy() });
     }
   }
 
@@ -1322,6 +1345,17 @@ export class GameScene extends Phaser.Scene {
       const name = this.names.get(p.id);
       if (!isAlive(p)) {
         name?.setVisible(false);
+        // 裁定71: ダウン中の固定砲台は暗い台座＋復帰までの円弧を出す
+        if (p.turret && p.lives > 0 && Number.isFinite(p.respawn) && p.respawn > 0) {
+          const r = radiusOf(p) * 0.95;
+          g.fillStyle(0x1f2937, 0.8).fillRect(p.x - r, p.y - r, r * 2, r * 2);
+          g.lineStyle(2, 0x64748b, 0.9).strokeRect(p.x - r, p.y - r, r * 2, r * 2);
+          const ratio = 1 - p.respawn / BALANCE.danmaku.subTurrets.downSeconds;
+          g.lineStyle(3, 0xfca5a5, 0.8);
+          g.beginPath();
+          g.arc(p.x, p.y, r + 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
+          g.strokePath();
+        }
         continue;
       }
       // 裁定43-C: 名前の文字色もチーム色にする（遠くの識別を助ける）
@@ -1339,16 +1373,6 @@ export class GameScene extends Phaser.Scene {
       if (to.mode === "danmaku" && !p.boss) {
         g.fillStyle(0xffffff, 1).fillCircle(x, y, BALANCE.danmaku.hitRadius);
         g.lineStyle(1, 0xf87171, 0.9).strokeCircle(x, y, BALANCE.danmaku.hitRadius + 2);
-      }
-    }
-
-    // 裁定67: 固定砲台（壊せない設置物）。赤いひし形で描く
-    if (to.danmaku) {
-      const r = BALANCE.danmaku.subTurrets.bodyRadius;
-      for (const st of to.danmaku.subTurrets) {
-        g.fillStyle(0x7f1d1d, 0.95).fillPoints([{ x: st.x, y: st.y - r }, { x: st.x + r, y: st.y }, { x: st.x, y: st.y + r }, { x: st.x - r, y: st.y }], true);
-        g.lineStyle(2, 0xfca5a5, 1).strokePoints([{ x: st.x, y: st.y - r }, { x: st.x + r, y: st.y }, { x: st.x, y: st.y + r }, { x: st.x - r, y: st.y }], true);
-        g.fillStyle(0xfca5a5, 1).fillCircle(st.x, st.y, 4);
       }
     }
 
@@ -1384,7 +1408,7 @@ export class GameScene extends Phaser.Scene {
         to.mode === "boss" ? `残機 ${stock(myPool)}   ${clock}` : `味方 ${stock(myPool)}   ${clock}   敵 ${stock(foePool)}`,
       );
     } else {
-      const others = to.players.filter((p) => p.id !== this.me && !(to.mode === "danmaku" && p.boss));
+      const others = to.players.filter((p) => p.id !== this.me && !(to.mode === "danmaku" && (p.boss || p.turret)));
       const maxLives = to.mode === "danmaku" ? BALANCE.danmaku.playerLives : P.lives;
       const fmt = (p: PlayerState) => `${p.name} ${"◆".repeat(Math.max(0, p.lives))}${"◇".repeat(Math.max(0, maxLives - p.lives))}`;
       this.hud.setText(`${me ? fmt(me) : ""}   ${clock}   ${others.map(fmt).join("  ")}`);
@@ -1477,6 +1501,7 @@ export class GameScene extends Phaser.Scene {
     // 裁定53: ボスは体が大きい。当たり判定と必ず同じ値を使う
     const r = radiusOf(p);
     const danger =
+      p.boss || p.turret ? false : // ボス・固定砲台は残機1が常態なので点滅させない
       this.state.mode === "teams" || this.state.mode === "boss" ? (this.state.teamLives[p.team] ?? 9) <= 1 : p.lives <= 1;
     const dangerBlink = danger && Math.floor(this.time.now / 220) % 2 === 0;
     const blink = p.invuln > 0 && Math.floor(this.time.now / 80) % 2 === 0;
@@ -1491,7 +1516,18 @@ export class GameScene extends Phaser.Scene {
 
     // 形状: 速=鋭い三角 / 重=六角 / 支=円（SPEC 13章の色覚対応）
     g.fillStyle(bodyColor, bodyAlpha);
-    if (p.cls === "speed") {
+    if (p.turret) {
+      // 裁定70: 固定砲台。赤い四角い台座＋砲身。敵として一目で分かる色にする
+      const q = r * 0.95;
+      g.fillStyle(flashing ? 0xffffff : 0x7f1d1d, bodyAlpha);
+      g.fillRect(x - q, y - q, q * 2, q * 2);
+      g.lineStyle(3, teamColor, 1);
+      g.strokeRect(x - q, y - q, q * 2, q * 2);
+      g.fillStyle(0xfca5a5, 0.9);
+      g.fillCircle(x, y, r * 0.4);
+      g.lineStyle(6, 0xfca5a5, 0.95);
+      g.lineBetween(x, y, x + Math.cos(p.aim) * (r + 10), y + Math.sin(p.aim) * (r + 10));
+    } else if (p.cls === "speed") {
       const pts = [
         { x: x + Math.cos(p.aim) * r * 1.25, y: y + Math.sin(p.aim) * r * 1.25 },
         { x: x + Math.cos(p.aim + 2.5) * r, y: y + Math.sin(p.aim + 2.5) * r },

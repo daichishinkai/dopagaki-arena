@@ -114,8 +114,8 @@ export const BALANCE = {
    * 数値はすべて調整プレースホルダー。
    */
   danmaku: {
-    /** 砲台のHP倍率（boss と別に持つ: 1人で削るので低め） */
-    hpMultiplier: 6,
+    /** 砲台のHP倍率（boss と別に持つ: 1人で削るので低め）。裁定73: 6→1.5（150）。短時間の高密度勝負に振る */
+    hpMultiplier: 1.5,
     /** 挑戦者の個人残機 */
     playerLives: 3,
     /** 制限時間（切れたら負け） */
@@ -135,9 +135,10 @@ export const BALANCE = {
      * count=発数（切り上げ）、rate=回転（CDを割る・渦の発射数に掛ける）、speed=弾速。残機・制限時間は変えない。
      */
     difficulties: [
-      { label: "普通", countMul: 1.0, rateMul: 1.0, speedMul: 1.0, damageMul: 1.2, lifestealMul: 0.6 },
-      { label: "難しい", countMul: 1.25, rateMul: 1.3, speedMul: 1.15, damageMul: 1.6, lifestealMul: 0.4 },
-      { label: "地獄", countMul: 1.5, rateMul: 1.6, speedMul: 1.3, damageMul: 2.0, lifestealMul: 0.25 },
+      // 裁定73: 敵ダメ×2、回復×0.5（lifestealMul と regenMul の両方）
+      { label: "普通", countMul: 1.0, rateMul: 1.0, speedMul: 1.0, damageMul: 2.4, lifestealMul: 0.3, regenMul: 0.5 },
+      { label: "難しい", countMul: 1.25, rateMul: 1.3, speedMul: 1.15, damageMul: 3.2, lifestealMul: 0.2, regenMul: 0.5 },
+      { label: "地獄", countMul: 1.5, rateMul: 1.6, speedMul: 1.3, damageMul: 4.0, lifestealMul: 0.125, regenMul: 0.5 },
     ],
     /**
      * 固定砲台（裁定67・ユーザー要望）。spawnPhase の形態に入ると4隅に現れ、**順番に1発ずつ**自機を狙う。
@@ -156,8 +157,12 @@ export const BALANCE = {
       speed: px(340),
       damage: 10,
       radius: px(8),
-      /** 描画・弾の発射位置に使う半径 */
-      bodyRadius: px(18),
+      /** 体の大きさ（通常キャラ比・裁定70: 当たり判定と描画で共通） */
+      radiusMultiplier: 1.15,
+      /** 耐久（裁定70）。通常キャラと同じHPで、頭上バーがそのまま使える */
+      hp: 100,
+      /** HPを削り切ると壊れるのではなく、この秒数ダウンして復帰する（裁定71） */
+      downSeconds: 12,
     },
     /**
      * 形態ごとの弾幕。配列の順に第1・第2・第3形態。HP比率が hpBelow を下回ると次へ。
@@ -432,8 +437,8 @@ export function crossSecondsOf(cls: CharClass): number {
  * 当たり判定・壁の押し出し・場外クランプ・描画は必ずこれを通すこと。
  * 片方だけ P.radius のままにすると、裁定42で直した「見えているのに当たらない」が再発する。
  */
-export function radiusOf(p: { boss?: boolean }): number {
-  return BALANCE.player.radius * (p.boss ? BALANCE.boss.radiusMultiplier : 1);
+export function radiusOf(p: { boss?: boolean; turret?: boolean }): number {
+  return BALANCE.player.radius * (p.boss ? BALANCE.boss.radiusMultiplier : p.turret ? BALANCE.danmaku.subTurrets.radiusMultiplier : 1);
 }
 
 export function shieldMaxOf(cls: CharClass): number {
@@ -492,4 +497,10 @@ export function danmakuPhaseAt(phase: number, difficulty: number): DanmakuPhase 
 export function danmakuLifestealMul(mode: string, difficulty: number): number {
   if (mode !== "danmaku") return 1;
   return BALANCE.danmaku.difficulties[difficulty]?.lifestealMul ?? 1;
+}
+
+/** 弾幕モードでの時間経過シールド回復の倍率（裁定73）。danmaku 以外は 1 */
+export function danmakuRegenMul(mode: string, difficulty: number): number {
+  if (mode !== "danmaku") return 1;
+  return BALANCE.danmaku.difficulties[difficulty]?.regenMul ?? 1;
 }

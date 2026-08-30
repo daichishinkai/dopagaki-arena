@@ -631,10 +631,36 @@ describe("弾幕モードの締め（裁定67）", () => {
     t.hp = BALANCE.player.hp * BALANCE.danmaku.hpMultiplier * (BALANCE.danmaku.phases[1]!.hpBelow - 0.01);
     let r = run(s, {}, DT);
     expect(r.events.some((e) => e.type === "danmakuSummon")).toBe(true);
-    expect(r.state.danmaku!.subTurrets).toHaveLength(BALANCE.danmaku.subTurrets.positions.length);
+    expect(r.state.players.filter((p) => p.turret && isAlive(p))).toHaveLength(BALANCE.danmaku.subTurrets.positions.length);
     // 召喚直後は形態移行の弾消しで空。しばらく回すと4隅から弾が出る
     r = run(r.state, {}, BALANCE.danmaku.subTurrets.cooldown * 4 + 1.0);
-    const far = r.events.filter((e) => e.type === "shoot" && e.owner === "turret" && Math.hypot(e.x - t.x, e.y - t.y) > 200);
+    const far = r.events.filter((e) => e.type === "shoot" && e.owner.startsWith("turret-"));
     expect(far.length).toBeGreaterThanOrEqual(4);
   });
+
+  it("固定砲台はダウンして一定時間後に同じ場所へ復帰する（裁定71）", () => {
+    const s = dm(0);
+    const t = s.players.find((p) => p.id === "turret")!;
+    t.hp = BALANCE.player.hp * BALANCE.danmaku.hpMultiplier * (BALANCE.danmaku.phases[1]!.hpBelow - 0.01);
+    let r = run(s, {}, DT);
+    const st = r.state.players.find((p) => p.id === "turret-1")!;
+    const { x, y } = st;
+    st.hp = 1; st.invuln = 0;
+    const me = r.state.players.find((p) => p.id === "me")!;
+    me.x = st.x - 50; me.y = st.y; me.aim = 0; me.invuln = 0;
+    const killsBefore = me.kills;
+    r.state.danmaku!.ringCd = 999; r.state.danmaku!.aimedCd = 999;
+    r = run(r.state, { me: { ...NULL_INPUT, aim: 0, fire: true } }, 1.0);
+    const down = r.state.players.find((p) => p.id === "turret-1")!;
+    expect(isAlive(down)).toBe(false);
+    expect(down.lives).toBe(1);
+    expect(r.state.players.find((p) => p.id === "me")!.kills).toBe(killsBefore); // ダウンは撃破に数えない
+    r = run(r.state, {}, BALANCE.danmaku.subTurrets.downSeconds + 0.5);
+    const back = r.state.players.find((p) => p.id === "turret-1")!;
+    expect(isAlive(back)).toBe(true);
+    expect(back.turret).toBe(true);
+    expect(back.x).toBe(x); expect(back.y).toBe(y);
+    expect(back.hp).toBe(BALANCE.danmaku.subTurrets.hp);
+  });
+
 });

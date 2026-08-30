@@ -95,6 +95,8 @@ export interface PlayerState {
   swingPass: number;
   /** ボス（裁定49）。強化倍率と専用スキルの持ち主かどうか */
   boss?: boolean;
+  /** 弾幕モードの固定砲台（裁定70）。動かない・壊せる敵。召喚まで lives=0 で隠す */
+  turret?: boolean;
   /** ボスの範囲ノックバックの溜め残り秒（>0 で溜め中） */
   knockbackT: number;
   /** ボスの範囲ノックバックのCD残り秒 */
@@ -287,8 +289,8 @@ export interface DanmakuState {
   aimedCd: number;
   spiralAngle: number;
   spiralAcc: number;
-  /** 固定砲台（裁定67）。召喚前は空 */
-  subTurrets: { x: number; y: number }[];
+  /** 固定砲台（裁定67）: 召喚済みか。実体は turret フラグ付きのプレイヤー（裁定70） */
+  summoned: boolean;
   subCd: number;
   subIndex: number;
 }

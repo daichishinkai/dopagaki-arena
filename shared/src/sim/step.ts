@@ -1,4 +1,4 @@
-import { BALANCE, bossFanOf, bossKnockbackCooldownOf, bossMaxHpOf, bossPhaseOf, danmakuLifestealMul, danmakuPhaseAt, danmakuPhaseOf, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
+import { BALANCE, bossFanOf, bossKnockbackCooldownOf, bossMaxHpOf, bossPhaseOf, danmakuLifestealMul, danmakuPhaseAt, danmakuPhaseOf, danmakuRegenMul, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
 import type {
   BulletKind,
   BulletState,
@@ -181,6 +181,22 @@ export function createMatch(
     }
     return created;
   });
+  if (mode === "danmaku") {
+    // 裁定70: 固定砲台を敵プレイヤーとして先に作っておく（召喚まで lives=0 で見えない）。
+    // 途中で players を増やすと描画側の名前・補間がずれるので、最初から居させる
+    BALANCE.danmaku.subTurrets.positions.forEach((q, i) => {
+      const t = createPlayer(`turret-${i + 1}`, "固定砲台", "heavy", ps.length);
+      t.team = 1;
+      t.turret = true;
+      t.lives = 0;
+      t.respawn = Infinity;
+      t.hp = 0;
+      t.shield = 0;
+      t.x = F.width * q.x;
+      t.y = F.height * q.y;
+      ps.push(t);
+    });
+  }
   const teamLives: Record<number, number> = {};
   if (mode === "boss") {
     for (const p of ps) teamLives[p.team] = p.team === 1 ? 1 : BALANCE.boss.playerLives;
@@ -208,7 +224,7 @@ export function createMatch(
           }
         : null,
     timeLeft: mode === "danmaku" ? BALANCE.danmaku.seconds : BALANCE.matchSeconds,
-    danmaku: mode === "danmaku" ? { difficulty: options.danmakuDifficulty ?? 0, ringCd: 1.0, ringShots: 0, aimedCd: 1.5, spiralAngle: 0, spiralAcc: 0, subTurrets: [], subCd: 0, subIndex: 0 } : null,
+    danmaku: mode === "danmaku" ? { difficulty: options.danmakuDifficulty ?? 0, ringCd: 1.0, ringShots: 0, aimedCd: 1.5, spiralAngle: 0, spiralAcc: 0, summoned: false, subCd: 0, subIndex: 0 } : null,
     practice: options.practice === true,
     players: ps,
     bullets: [],
@@ -283,7 +299,7 @@ export function applyDamage(target: PlayerState, rawDamage: number, attacker?: P
   // 裁定49: ボスの与ダメ倍率
   const raw = attacker?.boss ? rawDamage * BALANCE.boss.damageMultiplier : rawDamage;
   let dmg = raw * BALANCE.classes[target.cls].damageTaken;
-  if (target.boss) dmg = raw; // ボスはクラスの被ダメ補正を受けない（HPで強さを表す）
+  if (target.boss || target.turret) dmg = raw; // ボス・固定砲台はクラスの被ダメ補正を受けない（HPで強さを表す）
   if (target.shell > 0) dmg *= 1 - BALANCE.heavySkills.cover.shellDamageCut;
   const shieldDamage = Math.min(target.shield, dmg);
   const hpDamage = Math.min(target.hp, dmg - shieldDamage);
@@ -650,7 +666,10 @@ function onKill(state: SimState, target: PlayerState, attacker: PlayerState | un
   target.deaths += 1;
   target.guarding = false;
   target.cc = 0;
-  if (state.practice) {
+  if (target.turret) {
+    // 裁定71: 固定砲台は壊れず、一定時間ダウンして同じ場所に復帰する
+    target.respawn = BALANCE.danmaku.subTurrets.downSeconds;
+  } else if (state.practice) {
     // 訓練場（裁定35）: 残機は減らさず、通常の復活時間で自動復活
     target.respawn = P.respawnSeconds;
   } else if (state.mode === "teams" || state.mode === "boss") {
@@ -672,10 +691,10 @@ function onKill(state: SimState, target: PlayerState, attacker: PlayerState | un
     target.lives -= 1;
     target.respawn = target.lives > 0 ? P.respawnSeconds : Infinity;
   }
-  if (attacker) {
+  if (attacker && !target.turret) { // 裁定71: 砲台ダウンは撃破に数えない（回復の稼ぎ場になるため）
     attacker.kills += 1;
     // 裁定64: 弾幕モードの砲台は撃破回復しない（被弾＝砲台が回復、では削りが進まない）
-    if (!(state.mode === "danmaku" && attacker.boss)) attacker.hp = Math.min(P.hp, attacker.hp + P.killHealHp);
+    if (!(state.mode === "danmaku" && (attacker.boss || attacker.turret))) attacker.hp = Math.min(P.hp, attacker.hp + P.killHealHp);
   }
   events.push({ type: "kill", target: target.id, attacker: attacker?.id ?? target.id });
 }
@@ -1118,6 +1137,15 @@ function clearHeavyCharges(p: PlayerState): void {
 }
 
 function respawnPlayer(state: SimState, p: PlayerState, events: SimEvent[]): void {
+  if (p.turret) {
+    // 裁定71: 固定砲台はその場で復帰（位置・フラグを保つ）
+    p.hp = BALANCE.danmaku.subTurrets.hp;
+    p.shield = 0;
+    p.respawn = 0;
+    p.invuln = P.respawnInvulnSeconds;
+    events.push({ type: "respawn", target: p.id });
+    return;
+  }
   const slot = state.players.findIndex((q) => q.id === p.id);
   const idxInTeam = state.players.filter((q, i) => q.team === p.team && i < slot).length;
   const spawn = spawnPoint(state.mode, p.team, idxInTeam, slot);
@@ -1191,20 +1219,29 @@ function stepDanmaku(state: SimState, dt: number, events: SimEvent[]): void {
   if (next > turret.bossPhase) {
     turret.bossPhase = next;
     turret.invuln = Math.max(turret.invuln, D.phaseInvulnSeconds);
-    if (D.clearBulletsOnPhase) state.bullets = state.bullets.filter((b) => b.owner !== turret.id);
+    if (D.clearBulletsOnPhase) state.bullets = state.bullets.filter((b) => b.ownerTeam !== turret.team);
     dm.ringCd = Math.max(dm.ringCd, D.phaseInvulnSeconds);
     dm.aimedCd = Math.max(dm.aimedCd, D.phaseInvulnSeconds);
     events.push({ type: "bossPhase", owner: turret.id, phase: next, x: turret.x, y: turret.y });
     // 裁定67: 固定砲台の召喚
-    if (next >= D.subTurrets.spawnPhase && dm.subTurrets.length === 0) {
-      dm.subTurrets = D.subTurrets.positions.map((q) => ({ x: F.width * q.x, y: F.height * q.y }));
+    if (next >= D.subTurrets.spawnPhase && !dm.summoned) {
+      dm.summoned = true;
       dm.subCd = D.phaseInvulnSeconds;
-      events.push({ type: "danmakuSummon", positions: dm.subTurrets.map((q) => ({ ...q })) });
+      const spots: { x: number; y: number }[] = [];
+      for (const t of state.players) {
+        if (!t.turret) continue;
+        t.lives = 1;
+        t.respawn = 0;
+        t.hp = D.subTurrets.hp;
+        t.invuln = D.phaseInvulnSeconds;
+        spots.push({ x: t.x, y: t.y });
+      }
+      events.push({ type: "danmakuSummon", positions: spots });
     }
   }
   const ph = danmakuPhaseAt(turret.bossPhase, dm.difficulty); // 裁定66: 難易度倍率込み
   const diff = D.difficulties[dm.difficulty] ?? D.difficulties[0]!;
-  const targets = state.players.filter((p) => !p.boss && isAlive(p));
+  const targets = state.players.filter((p) => p.team !== turret.team && isAlive(p));
   const target = targets[0];
   const fire = (angle: number, shot: { speed: number; damage: number; radius: number }) => {
     const b = spawnBullet(state, turret, "hmg", angle, shot.speed, shot.damage, shot.radius, true, 0);
@@ -1235,21 +1272,19 @@ function stepDanmaku(state: SimState, dt: number, events: SimEvent[]): void {
     events.push({ type: "shoot", owner: turret.id, x: turret.x, y: turret.y, kind: "hmg" });
   }
 
-  // 固定砲台（裁定67）: 順番に1発ずつ自機狙い
-  if (dm.subTurrets.length > 0 && target) {
+  // 固定砲台（裁定67・裁定70で壊せる敵に）: 生きている砲台が順番に1発ずつ自機狙い
+  const alive = state.players.filter((p) => p.turret && isAlive(p));
+  if (alive.length > 0 && target) {
     const ST = D.subTurrets;
     dm.subCd -= dt;
     if (dm.subCd <= 0) {
-      const st = dm.subTurrets[dm.subIndex % dm.subTurrets.length]!;
-      dm.subIndex = (dm.subIndex + 1) % dm.subTurrets.length;
+      const st = alive[dm.subIndex % alive.length]!;
+      dm.subIndex = (dm.subIndex + 1) % alive.length;
       const angle = Math.atan2(target.y - st.y, target.x - st.x);
-      const b = spawnBullet(state, turret, "hmg", angle, ST.speed * diff.speedMul, ST.damage * diff.damageMul, ST.radius, true, 0);
-      const muzzle = ST.bodyRadius + ST.radius + 2;
-      b.x = st.x + Math.cos(angle) * muzzle;
-      b.y = st.y + Math.sin(angle) * muzzle;
-      b.ox = b.x; b.oy = b.y;
+      st.aim = angle;
+      const b = spawnBullet(state, st, "hmg", angle, ST.speed * diff.speedMul, ST.damage * diff.damageMul, ST.radius, true, 0);
       dm.subCd = ST.cooldown / diff.rateMul;
-      events.push({ type: "shoot", owner: turret.id, x: b.x, y: b.y, kind: "hmg" });
+      events.push({ type: "shoot", owner: st.id, x: b.x, y: b.y, kind: "hmg" });
     }
   }
 
@@ -1402,6 +1437,18 @@ function checkMatchEnd(state: SimState, events: SimEvent[]): void {
     } else if (state.timeLeft <= 0) {
       result = judgeTimeout(state);
     }
+  } else if (state.mode === "danmaku") {
+    // 裁定70: 勝敗は本体の砲台と挑戦者だけで決める（固定砲台は生きていても関係ない）
+    const boss = state.players.find((p) => p.boss);
+    const challengers = state.players.filter((p) => !p.boss && !p.turret);
+    if (!boss || boss.lives <= 0) {
+      const rep = challengers[0];
+      result = { winner: rep?.id ?? null, winnerTeam: rep?.team ?? null, reason: rep ? "lives" : "draw" };
+    } else if (challengers.every((p) => p.lives <= 0)) {
+      result = { winner: boss.id, winnerTeam: boss.team, reason: "lives" };
+    } else if (state.timeLeft <= 0) {
+      result = judgeTimeout(state);
+    }
   } else {
     const survivors = state.players.filter((p) => p.lives > 0);
     if (survivors.length <= 1) {
@@ -1446,7 +1493,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     pendingLinks: [...prev.pendingLinks],
     linkWindows: prev.linkWindows.map((w) => ({ ...w })),
     zone: prev.zone ? { ...prev.zone, gauge: { ...prev.zone.gauge } } : null,
-    danmaku: prev.danmaku ? { ...prev.danmaku, subTurrets: prev.danmaku.subTurrets.map((t) => ({ ...t })) } : null,
+    danmaku: prev.danmaku ? { ...prev.danmaku } : null,
   };
   const byId = new Map(state.players.map((p) => [p.id, p]));
 
@@ -1655,7 +1702,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     }
     if (p.cls === "speed") p.escapeGauge = Math.min(BALANCE.speedSkills.gaugeMax, p.escapeGauge + BALANCE.speedSkills.gaugeRegenPerSecond * dt * boostRate);
     if (BALANCE.classes[p.cls].shieldTimeRegen && state.t - p.lastDamagedAt >= SH.regenDelaySeconds) {
-      gainShield(p, SH.regenPerSecond * dt);
+      gainShield(p, SH.regenPerSecond * dt * danmakuRegenMul(state.mode, state.danmaku?.difficulty ?? 0)); // 裁定73: 弾幕モードは半分
     }
 
     // 壁との衝突（押し出し）・外壁
