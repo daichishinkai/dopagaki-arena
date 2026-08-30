@@ -1,4 +1,4 @@
-import { BALANCE, bossFanOf, bossKnockbackCooldownOf, bossMaxHpOf, bossPhaseOf, danmakuPhaseOf, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
+import { BALANCE, bossFanOf, bossKnockbackCooldownOf, bossMaxHpOf, bossPhaseOf, danmakuPhaseAt, danmakuPhaseOf, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
 import type {
   BulletKind,
   BulletState,
@@ -137,7 +137,7 @@ export function createPlayer(id: PlayerId, name: string, cls: CharClass, slot: n
 export function createMatch(
   players: ReadonlyArray<{ id: PlayerId; name: string; cls?: CharClass; team?: number }>,
   mode: MatchMode = "ffa",
-  options: { practice?: boolean } = {},
+  options: { practice?: boolean; danmakuDifficulty?: number } = {},
 ): SimState {
   const half = Math.ceil(players.length / 2);
   const teamIndex: Record<number, number> = {};
@@ -208,7 +208,7 @@ export function createMatch(
           }
         : null,
     timeLeft: mode === "danmaku" ? BALANCE.danmaku.seconds : BALANCE.matchSeconds,
-    danmaku: mode === "danmaku" ? { ringCd: 1.0, ringShots: 0, aimedCd: 1.5, spiralAngle: 0, spiralAcc: 0 } : null,
+    danmaku: mode === "danmaku" ? { difficulty: options.danmakuDifficulty ?? 0, ringCd: 1.0, ringShots: 0, aimedCd: 1.5, spiralAngle: 0, spiralAcc: 0 } : null,
     practice: options.practice === true,
     players: ps,
     bullets: [],
@@ -1196,7 +1196,7 @@ function stepDanmaku(state: SimState, dt: number, events: SimEvent[]): void {
     dm.aimedCd = Math.max(dm.aimedCd, D.phaseInvulnSeconds);
     events.push({ type: "bossPhase", owner: turret.id, phase: next, x: turret.x, y: turret.y });
   }
-  const ph = D.phases[turret.bossPhase - 1] ?? D.phases[0]!;
+  const ph = danmakuPhaseAt(turret.bossPhase, dm.difficulty); // 裁定66: 難易度倍率込み
   const targets = state.players.filter((p) => !p.boss && isAlive(p));
   const target = targets[0];
   const fire = (angle: number, shot: { speed: number; damage: number; radius: number }) => {

@@ -87,22 +87,27 @@ export class TitleScene extends Phaser.Scene {
       }
     });
 
-    // ---- 中央パネル: 弾幕モード（裁定64・裁定65で独立） ----
-    panel(this, 640, 385, 390, 350, "弾幕モード");
+    // ---- 右パネル: 弾幕モード（裁定64・裁定65で独立・裁定66で右端へ） ----
+    panel(this, 1065, 385, 390, 350, "弾幕モード");
     // 砲台とリング弾のイメージ
     const art = this.add.graphics();
-    art.fillStyle(0xef4444, 0.85).fillCircle(640, 320, 22);
-    art.lineStyle(2, 0xfca5a5, 1).strokeCircle(640, 320, 22);
+    art.fillStyle(0xef4444, 0.85).fillCircle(1065, 320, 22);
+    art.lineStyle(2, 0xfca5a5, 1).strokeCircle(1065, 320, 22);
     for (let i = 0; i < 12; i++) {
       const a = (Math.PI * 2 * i) / 12;
-      art.fillStyle(0xa5f3fc, 0.9).fillCircle(640 + Math.cos(a) * 58, 320 + Math.sin(a) * 58, 5);
+      art.fillStyle(0xa5f3fc, 0.9).fillCircle(1065 + Math.cos(a) * 58, 320 + Math.sin(a) * 58, 5);
     }
-    art.fillStyle(0x22e5ff, 1).fillCircle(700, 372, 9);
-    art.fillStyle(0xffffff, 1).fillCircle(700, 372, 3);
-    label(this, 640, 405, "スピード限定・ひとり用", 15, "#e5e7eb");
-    label(this, 640, 428, "中央の砲台の弾幕を避けながら削る", 13, "#94a3b8");
-    label(this, 640, 448, `残機${BALANCE.danmaku.playerLives}・制限時間${Math.round(BALANCE.danmaku.seconds / 60)}分・剣で弾を消せる`, 13, "#94a3b8");
-    button(this, 640, 500, "挑戦する", () => {
+    art.fillStyle(0x22e5ff, 1).fillCircle(1125, 372, 9);
+    art.fillStyle(0xffffff, 1).fillCircle(1125, 372, 3);
+    label(this, 1065, 400, "スピード限定・ひとり用", 15, "#e5e7eb");
+    label(this, 1065, 421, `砲台の弾幕を避けながら削る／残機${BALANCE.danmaku.playerLives}・${Math.round(BALANCE.danmaku.seconds / 60)}分`, 13, "#94a3b8");
+    // 裁定66: 難易度（発数・回転・弾速の倍率）
+    const diffs = BALANCE.danmaku.difficulties;
+    const diffBtn = button(this, 1065, 462, `難易度: ${diffs[session.danmakuDifficulty]?.label ?? diffs[0]!.label}`, () => {
+      session.danmakuDifficulty = (session.danmakuDifficulty + 1) % diffs.length;
+      diffBtn.setText(`難易度: ${diffs[session.danmakuDifficulty]!.label}`);
+    }, 300, 44);
+    button(this, 1065, 520, "挑戦する", () => {
       session.mode = "solo";
       session.players = [
         { id: "me", name: session.name, cls: "speed", team: 0 },
@@ -113,22 +118,22 @@ export class TitleScene extends Phaser.Scene {
       this.scene.start("game");
     }, 300, 52);
 
-    // ---- 右パネル: トレーニング ----
-    panel(this, 1065, 385, 390, 350, "トレーニング");
+    // ---- 中央パネル: トレーニング ----
+    panel(this, 640, 385, 390, 350, "トレーニング");
 
     const CLASS_NAME = { speed: "スピード", heavy: "タンク", support: "サポート" } as const;
     const order = ["speed", "heavy", "support"] as const;
-    const clsBtn = button(this, 1065, 300, `キャラ: ${CLASS_NAME[session.myCls]}`, () => {
+    const clsBtn = button(this, 640, 300, `キャラ: ${CLASS_NAME[session.myCls]}`, () => {
       const i = order.indexOf(session.myCls);
       session.myCls = order[(i + 1) % order.length]!;
       clsBtn.setText(`キャラ: ${CLASS_NAME[session.myCls]}`);
     });
     const foeNames = ["的", "bot Lv1", "bot Lv2", "bot Lv3"];
-    const foeBtn = button(this, 1065, 390, `相手: ${foeNames[session.practiceFoe]}`, () => {
+    const foeBtn = button(this, 640, 390, `相手: ${foeNames[session.practiceFoe]}`, () => {
       session.practiceFoe = (session.practiceFoe + 1) % 4;
       foeBtn.setText(`相手: ${foeNames[session.practiceFoe]}`);
     });
-    button(this, 1065, 480, "練習開始", () => {
+    button(this, 640, 480, "練習開始", () => {
       session.mode = "solo";
       const foes = ["的", "bot Lv1", "bot Lv2", "bot Lv3"] as const;
       const foe = foes[session.practiceFoe]!;
@@ -149,10 +154,10 @@ export class TitleScene extends Phaser.Scene {
     });
 
     // キャラ説明: アイコンを押すと各キャラの説明画面へ
-    label(this, 1065, 528, "キャラクター解説", 14, "#7dd3fc");
+    label(this, 640, 528, "キャラクター解説", 14, "#7dd3fc");
     const CLASS_COLOR = { speed: 0x22d3ee, heavy: 0xfb923c, support: 0xa3e635 } as const;
     order.forEach((c, i) => {
-      const ix = 1065 + (i - 1) * 96;
+      const ix = 640 + (i - 1) * 96;
       const g = this.add.graphics();
       g.fillStyle(CLASS_COLOR[c], 0.75).fillCircle(ix, 570, 30);
       g.lineStyle(2, CLASS_COLOR[c], 1).strokeCircle(ix, 570, 30);

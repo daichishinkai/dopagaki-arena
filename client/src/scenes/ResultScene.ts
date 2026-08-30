@@ -50,7 +50,8 @@ export class ResultScene extends Phaser.Scene {
     if (stats && session.matchMode === "danmaku") {
       // 裁定64: 弾幕モードはタイムと被弾数だけ
       const m = Math.floor(stats.elapsed / 60), sec = stats.elapsed % 60;
-      label(this, W / 2, H * 0.66, `${outcome === "WIN" ? "クリアタイム" : "生存時間"} ${m}:${String(sec).padStart(2, "0")} ／ 与ダメ ${mine?.damageDealt ?? 0} ／ ${mine?.deaths ?? 0}ダウン`, 16, "#94a3b8");
+      const diff = BALANCE.danmaku.difficulties[session.danmakuDifficulty]?.label ?? "";
+      label(this, W / 2, H * 0.66, `難易度 ${diff} ／ ${outcome === "WIN" ? "クリアタイム" : "生存時間"} ${m}:${String(sec).padStart(2, "0")} ／ 与ダメ ${mine?.damageDealt ?? 0} ／ ${mine?.deaths ?? 0}ダウン`, 16, "#94a3b8");
     } else if (stats) {
       label(this, W / 2, H * 0.66, `連携（LINK）${stats.linkCount}回・最大連携ダメージ ${stats.maxLinkDamage} ／ 与ダメ ${mine?.damageDealt ?? 0} ／ ${mine?.kills ?? 0}撃破 ${mine?.deaths ?? 0}ダウン`, 16, "#94a3b8");
     }

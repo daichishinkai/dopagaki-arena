@@ -38,6 +38,8 @@ export const session = {
   myCls: "speed" as CharClass,
   /** 練習相手: 0=的 / 1-3=bot Lv */
   practiceFoe: 0,
+  /** 弾幕モードの難易度（裁定66）: BALANCE.danmaku.difficulties の添字 */
+  danmakuDifficulty: 0,
   lastResult: null as MatchResult | null,
   /** リザルト称号用の試合統計 */
   lastStats: null as { linkCount: number; maxLinkDamage: number; elapsed: number; players: { id: PlayerId; name: string; team: number; kills: number; deaths: number; damageDealt: number }[] } | null,

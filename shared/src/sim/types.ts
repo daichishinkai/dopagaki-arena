@@ -280,6 +280,8 @@ export interface ZoneState {
 
 /** 弾幕砲台のタイマー（裁定64） */
 export interface DanmakuState {
+  /** 難易度の添字（裁定66: BALANCE.danmaku.difficulties） */
+  difficulty: number;
   ringCd: number;
   ringShots: number;
   aimedCd: number;

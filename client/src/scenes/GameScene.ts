@@ -114,7 +114,7 @@ export class GameScene extends Phaser.Scene {
     this.isHost = session.mode === "solo" || session.net.isHost;
     this.me = session.mode === "solo" ? "me" : session.net.you;
     // 裁定64: 弾幕モードはソロだが訓練場ではない（残機・制限時間・決着がある）
-    this.state = createMatch(session.players, session.matchMode, { practice: session.mode === "solo" && session.matchMode !== "danmaku" });
+    this.state = createMatch(session.players, session.matchMode, { practice: session.mode === "solo" && session.matchMode !== "danmaku", danmakuDifficulty: session.danmakuDifficulty });
     this.botMems.clear();
     for (const b of session.bots) this.botMems.set(b.id, createBotMemory());
     this.inputs = {};
@@ -311,7 +311,7 @@ export class GameScene extends Phaser.Scene {
 
   /** 訓練場を初期状態へ戻す（裁定14: ゲージはゼロ・経過時間は扱わない） */
   private resetPractice(): void {
-    this.state = createMatch(session.players, session.matchMode === "ffa" ? "ffa" : session.matchMode === "danmaku" ? "danmaku" : "teams", { practice: session.matchMode !== "danmaku" });
+    this.state = createMatch(session.players, session.matchMode === "ffa" ? "ffa" : session.matchMode === "danmaku" ? "danmaku" : "teams", { practice: session.matchMode !== "danmaku", danmakuDifficulty: session.danmakuDifficulty });
     for (const p of this.state.players) {
       p.escapeGauge = 0;
       p.unifiedGauge = 0;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BALANCE } from "../src/balance";
+import { BALANCE, danmakuPhaseAt } from "../src/balance";
 import { radiusOf } from "../src/balance";
 import { botInput, createBotMemory } from "../src/sim/bot";
 import { canSee } from "../src/sim/vision";
@@ -580,5 +580,22 @@ describe("弾幕モード（裁定64）", () => {
     let r = run(s, { me: { ...NULL_INPUT, mx: 1, my: 0 } }, 0.2);
     r = run(r.state, { me: { ...NULL_INPUT, mx: -1, my: 0 } }, DT);
     expect(r.state.players.find((p) => p.id === "me")!.turnLock).toBe(0);
+  });
+});
+
+describe("弾幕モードの難易度（裁定66）", () => {
+  it("難易度が上がるほど発数・回転・弾速が上がり、残機は変わらない", () => {
+    const n = danmakuPhaseAt(1, 0);
+    const h = danmakuPhaseAt(1, 2);
+    expect(h.ring.count).toBeGreaterThan(n.ring.count);
+    expect(h.ring.cooldown).toBeLessThan(n.ring.cooldown);
+    expect(h.aimed.speed).toBeGreaterThan(n.aimed.speed);
+    const s = createMatch([{ id: "me", name: "Me", cls: "speed" }, { id: "turret", name: "砲台", cls: "heavy" }], "danmaku", { danmakuDifficulty: 2 });
+    expect(s.danmaku?.difficulty).toBe(2);
+    expect(s.players.find((p) => p.id === "me")!.lives).toBe(BALANCE.danmaku.playerLives);
+    const r = run(s, {}, 2.0);
+    const s0 = createMatch([{ id: "me", name: "Me", cls: "speed" }, { id: "turret", name: "砲台", cls: "heavy" }], "danmaku");
+    const r0 = run(s0, {}, 2.0);
+    expect(r.state.bullets.length).toBeGreaterThan(r0.state.bullets.length);
   });
 });
