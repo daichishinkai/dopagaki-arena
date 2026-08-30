@@ -135,10 +135,30 @@ export const BALANCE = {
      * count=発数（切り上げ）、rate=回転（CDを割る・渦の発射数に掛ける）、speed=弾速。残機・制限時間は変えない。
      */
     difficulties: [
-      { label: "普通", countMul: 1.0, rateMul: 1.0, speedMul: 1.0 },
-      { label: "難しい", countMul: 1.25, rateMul: 1.3, speedMul: 1.15 },
-      { label: "地獄", countMul: 1.5, rateMul: 1.6, speedMul: 1.3 },
+      { label: "普通", countMul: 1.0, rateMul: 1.0, speedMul: 1.0, damageMul: 1.2, lifestealMul: 0.6 },
+      { label: "難しい", countMul: 1.25, rateMul: 1.3, speedMul: 1.15, damageMul: 1.6, lifestealMul: 0.4 },
+      { label: "地獄", countMul: 1.5, rateMul: 1.6, speedMul: 1.3, damageMul: 2.0, lifestealMul: 0.25 },
     ],
+    /**
+     * 固定砲台（裁定67・ユーザー要望）。spawnPhase の形態に入ると4隅に現れ、**順番に1発ずつ**自機を狙う。
+     * 同時撃ちにしないのは「安全な角度が無い」状態を避けるため。壊せない。弾は通常弾なので剣で消せる。
+     */
+    subTurrets: {
+      spawnPhase: 2,
+      positions: [
+        { x: 0.25, y: 0.25 },
+        { x: 0.75, y: 0.25 },
+        { x: 0.25, y: 0.75 },
+        { x: 0.75, y: 0.75 },
+      ],
+      /** 全体で1発ごとの間隔（4基なら各基はこの4倍） */
+      cooldown: 0.7,
+      speed: px(340),
+      damage: 10,
+      radius: px(8),
+      /** 描画・弾の発射位置に使う半径 */
+      bodyRadius: px(18),
+    },
     /**
      * 形態ごとの弾幕。配列の順に第1・第2・第3形態。HP比率が hpBelow を下回ると次へ。
      * - ring: 全周に等間隔。撃つたびに半歩ずつずらして隙間を動かす
@@ -457,13 +477,19 @@ export function danmakuPhaseOf(hpRatio: number): number {
 export function danmakuPhaseAt(phase: number, difficulty: number): DanmakuPhase {
   const base = BALANCE.danmaku.phases[phase - 1] ?? BALANCE.danmaku.phases[0]!;
   const d = BALANCE.danmaku.difficulties[difficulty] ?? BALANCE.danmaku.difficulties[0]!;
-  const shot = <T extends DanmakuShot>(x: T): T => ({ ...x, count: Math.ceil(x.count * d.countMul), cooldown: x.cooldown / d.rateMul, speed: x.speed * d.speedMul });
+  const shot = <T extends DanmakuShot>(x: T): T => ({ ...x, count: Math.ceil(x.count * d.countMul), cooldown: x.cooldown / d.rateMul, speed: x.speed * d.speedMul, damage: x.damage * d.damageMul });
   return {
     hpBelow: base.hpBelow,
     ring: shot(base.ring),
     aimed: shot(base.aimed),
     spiral: base.spiral
-      ? { ...base.spiral, arms: Math.ceil(base.spiral.arms * d.countMul), shotsPerSecond: base.spiral.shotsPerSecond * d.rateMul, turnRadPerSecond: base.spiral.turnRadPerSecond * d.speedMul, speed: base.spiral.speed * d.speedMul }
+      ? { ...base.spiral, arms: Math.ceil(base.spiral.arms * d.countMul), shotsPerSecond: base.spiral.shotsPerSecond * d.rateMul, turnRadPerSecond: base.spiral.turnRadPerSecond * d.speedMul, speed: base.spiral.speed * d.speedMul, damage: base.spiral.damage * d.damageMul }
       : null,
   };
+}
+
+/** 弾幕モードでの「当てて回復」の倍率（裁定67）。danmaku 以外は 1 */
+export function danmakuLifestealMul(mode: string, difficulty: number): number {
+  if (mode !== "danmaku") return 1;
+  return BALANCE.danmaku.difficulties[difficulty]?.lifestealMul ?? 1;
 }

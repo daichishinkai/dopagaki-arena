@@ -287,6 +287,10 @@ export interface DanmakuState {
   aimedCd: number;
   spiralAngle: number;
   spiralAcc: number;
+  /** 固定砲台（裁定67）。召喚前は空 */
+  subTurrets: { x: number; y: number }[];
+  subCd: number;
+  subIndex: number;
 }
 
 export interface SimState {
@@ -355,4 +359,6 @@ export type SimEvent =
   | { type: "knockback"; owner: PlayerId; x: number; y: number; radius: number }
   /** ボスの形態移行（裁定62） */
   | { type: "bossPhase"; owner: PlayerId; phase: number; x: number; y: number }
+  /** 固定砲台の召喚（裁定67） */
+  | { type: "danmakuSummon"; positions: { x: number; y: number }[] }
   | { type: "matchEnd"; result: MatchResult };

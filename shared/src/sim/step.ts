@@ -1,4 +1,4 @@
-import { BALANCE, bossFanOf, bossKnockbackCooldownOf, bossMaxHpOf, bossPhaseOf, danmakuPhaseAt, danmakuPhaseOf, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
+import { BALANCE, bossFanOf, bossKnockbackCooldownOf, bossMaxHpOf, bossPhaseOf, danmakuLifestealMul, danmakuPhaseAt, danmakuPhaseOf, moveSpeedOf, radiusOf, shieldMaxOf, type CharClass } from "../balance";
 import type {
   BulletKind,
   BulletState,
@@ -208,7 +208,7 @@ export function createMatch(
           }
         : null,
     timeLeft: mode === "danmaku" ? BALANCE.danmaku.seconds : BALANCE.matchSeconds,
-    danmaku: mode === "danmaku" ? { difficulty: options.danmakuDifficulty ?? 0, ringCd: 1.0, ringShots: 0, aimedCd: 1.5, spiralAngle: 0, spiralAcc: 0 } : null,
+    danmaku: mode === "danmaku" ? { difficulty: options.danmakuDifficulty ?? 0, ringCd: 1.0, ringShots: 0, aimedCd: 1.5, spiralAngle: 0, spiralAcc: 0, subTurrets: [], subCd: 0, subIndex: 0 } : null,
     practice: options.practice === true,
     players: ps,
     bullets: [],
@@ -617,7 +617,7 @@ function meleeSweepHit(state: SimState, p: PlayerState, prevA: number, curA: num
       const tx = Math.cos(target.aim), ty = Math.sin(target.aim);
       const ax = p.x - target.x, ay = p.y - target.y;
       const behind = tx * ax + ty * ay < 0;
-      if (behind) gainShield(p, cappedSteal(p, state.t, BALANCE.saber.lifestealPerHit, BALANCE.saber.lifestealCapPerSecond));
+      if (behind) gainShield(p, cappedSteal(p, state.t, BALANCE.saber.lifestealPerHit, BALANCE.saber.lifestealCapPerSecond) * danmakuLifestealMul(state.mode, state.danmaku?.difficulty ?? 0));
     } else if (p.cls === "heavy") {
       gainShield(p, result.total * (p.cls === "heavy" ? SH.heavyLifestealRatio : SH.lifestealRatio));
       p.unifiedGauge = Math.min(BALANCE.unifiedGauge.max, p.unifiedGauge + BALANCE.unifiedGauge.knifeHitGain);
@@ -1070,7 +1070,7 @@ function resolveBulletPlayerHit(state: SimState, b: BulletState, target: PlayerS
   events.push({ type: "hit", target: target.id, attacker: b.owner, x: hitX, y: hitY, damage: result.total, center, guarded: false, melee: false, weapon: b.kind });
 
   if (attacker) {
-    gainShield(attacker, result.total * (attacker.cls === "heavy" ? SH.heavyLifestealRatio : SH.lifestealRatio));
+    gainShield(attacker, result.total * (attacker.cls === "heavy" ? SH.heavyLifestealRatio : SH.lifestealRatio) * danmakuLifestealMul(state.mode, state.danmaku?.difficulty ?? 0)); // 裁定67: 弾幕モードは回復を絞る
     if (b.kind === "hmg") attacker.unifiedGauge = Math.min(BALANCE.unifiedGauge.max, attacker.unifiedGauge + BALANCE.unifiedGauge.hmgHitGain);
     if (b.kind === "pistol" && attacker.cls === "speed") {
       const prev = target.marks && target.marks.from === attacker.id && state.t < target.marks.expire ? target.marks.stacks : 0;
@@ -1195,8 +1195,15 @@ function stepDanmaku(state: SimState, dt: number, events: SimEvent[]): void {
     dm.ringCd = Math.max(dm.ringCd, D.phaseInvulnSeconds);
     dm.aimedCd = Math.max(dm.aimedCd, D.phaseInvulnSeconds);
     events.push({ type: "bossPhase", owner: turret.id, phase: next, x: turret.x, y: turret.y });
+    // 裁定67: 固定砲台の召喚
+    if (next >= D.subTurrets.spawnPhase && dm.subTurrets.length === 0) {
+      dm.subTurrets = D.subTurrets.positions.map((q) => ({ x: F.width * q.x, y: F.height * q.y }));
+      dm.subCd = D.phaseInvulnSeconds;
+      events.push({ type: "danmakuSummon", positions: dm.subTurrets.map((q) => ({ ...q })) });
+    }
   }
   const ph = danmakuPhaseAt(turret.bossPhase, dm.difficulty); // 裁定66: 難易度倍率込み
+  const diff = D.difficulties[dm.difficulty] ?? D.difficulties[0]!;
   const targets = state.players.filter((p) => !p.boss && isAlive(p));
   const target = targets[0];
   const fire = (angle: number, shot: { speed: number; damage: number; radius: number }) => {
@@ -1226,6 +1233,24 @@ function stepDanmaku(state: SimState, dt: number, events: SimEvent[]): void {
     for (let i = 0; i < n; i++) fire(start + stepA * i, ph.aimed);
     dm.aimedCd = ph.aimed.cooldown;
     events.push({ type: "shoot", owner: turret.id, x: turret.x, y: turret.y, kind: "hmg" });
+  }
+
+  // 固定砲台（裁定67）: 順番に1発ずつ自機狙い
+  if (dm.subTurrets.length > 0 && target) {
+    const ST = D.subTurrets;
+    dm.subCd -= dt;
+    if (dm.subCd <= 0) {
+      const st = dm.subTurrets[dm.subIndex % dm.subTurrets.length]!;
+      dm.subIndex = (dm.subIndex + 1) % dm.subTurrets.length;
+      const angle = Math.atan2(target.y - st.y, target.x - st.x);
+      const b = spawnBullet(state, turret, "hmg", angle, ST.speed * diff.speedMul, ST.damage * diff.damageMul, ST.radius, true, 0);
+      const muzzle = ST.bodyRadius + ST.radius + 2;
+      b.x = st.x + Math.cos(angle) * muzzle;
+      b.y = st.y + Math.sin(angle) * muzzle;
+      b.ox = b.x; b.oy = b.y;
+      dm.subCd = ST.cooldown / diff.rateMul;
+      events.push({ type: "shoot", owner: turret.id, x: b.x, y: b.y, kind: "hmg" });
+    }
   }
 
   // 渦: 回転する腕から連射
@@ -1421,7 +1446,7 @@ export function step(prev: SimState, inputs: Readonly<Record<PlayerId, PlayerInp
     pendingLinks: [...prev.pendingLinks],
     linkWindows: prev.linkWindows.map((w) => ({ ...w })),
     zone: prev.zone ? { ...prev.zone, gauge: { ...prev.zone.gauge } } : null,
-    danmaku: prev.danmaku ? { ...prev.danmaku } : null,
+    danmaku: prev.danmaku ? { ...prev.danmaku, subTurrets: prev.danmaku.subTurrets.map((t) => ({ ...t })) } : null,
   };
   const byId = new Map(state.players.map((p) => [p.id, p]));
 

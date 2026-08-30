@@ -599,3 +599,42 @@ describe("弾幕モードの難易度（裁定66）", () => {
     expect(r.state.bullets.length).toBeGreaterThan(r0.state.bullets.length);
   });
 });
+
+describe("弾幕モードの締め（裁定67）", () => {
+  function dm(diff = 2): SimState {
+    return createMatch([{ id: "me", name: "Me", cls: "speed" }, { id: "turret", name: "砲台", cls: "heavy" }], "danmaku", { danmakuDifficulty: diff });
+  }
+
+  it("難易度で砲台の弾ダメージが上がり、当てて回復が絞られる", () => {
+    const hard = danmakuPhaseAt(1, 2);
+    const normal = danmakuPhaseAt(1, 0);
+    expect(hard.ring.damage).toBeGreaterThan(normal.ring.damage);
+    // 回復: 砲台にピストルを当ててシールドの伸びを比べる
+    const shieldGain = (diff: number) => {
+      const s = dm(diff);
+      const me = s.players.find((p) => p.id === "me")!;
+      const t = s.players.find((p) => p.id === "turret")!;
+      me.x = t.x - 200; me.y = t.y; me.aim = 0; me.shield = 0;
+      s.danmaku!.ringCd = 999; s.danmaku!.aimedCd = 999; // 砲台を黙らせて回復量だけ測る
+      me.lastDamagedAt = s.t; // 時間経過の回復を止め、当てて回復だけを測る
+      const r = run(s, { me: { ...NULL_INPUT, aim: 0, fire2: true } }, 1.0); // スピードのピストルは副武器（右）
+      return r.state.players.find((p) => p.id === "me")!.shield;
+    };
+    const g0 = shieldGain(0), g2 = shieldGain(2);
+    expect(g0).toBeGreaterThan(0);
+    expect(g2).toBeLessThan(g0);
+  });
+
+  it("第2形態で固定砲台が4基現れ、順番に自機を狙って撃つ", () => {
+    const s = dm(0);
+    const t = s.players.find((p) => p.id === "turret")!;
+    t.hp = BALANCE.player.hp * BALANCE.danmaku.hpMultiplier * (BALANCE.danmaku.phases[1]!.hpBelow - 0.01);
+    let r = run(s, {}, DT);
+    expect(r.events.some((e) => e.type === "danmakuSummon")).toBe(true);
+    expect(r.state.danmaku!.subTurrets).toHaveLength(BALANCE.danmaku.subTurrets.positions.length);
+    // 召喚直後は形態移行の弾消しで空。しばらく回すと4隅から弾が出る
+    r = run(r.state, {}, BALANCE.danmaku.subTurrets.cooldown * 4 + 1.0);
+    const far = r.events.filter((e) => e.type === "shoot" && e.owner === "turret" && Math.hypot(e.x - t.x, e.y - t.y) > 200);
+    expect(far.length).toBeGreaterThanOrEqual(4);
+  });
+});

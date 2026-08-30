@@ -1000,6 +1000,12 @@ export class GameScene extends Phaser.Scene {
           this.shake = Math.max(this.shake, 10);
           break;
         }
+        case "danmakuSummon": {
+          this.notify("固定砲台が現れた！", "#fca5a5");
+          if (!this.lowSpec) for (const q of e.positions) this.expandRing(q.x, q.y, 10, 5, 0xfca5a5, 4, 400);
+          SFX.guardBreak();
+          break;
+        }
         case "knockback": {
           if (!this.lowSpec) {
             this.expandRing(e.x, e.y, 30, e.radius / 30, 0xf87171, 8, 320);
@@ -1333,6 +1339,16 @@ export class GameScene extends Phaser.Scene {
       if (to.mode === "danmaku" && !p.boss) {
         g.fillStyle(0xffffff, 1).fillCircle(x, y, BALANCE.danmaku.hitRadius);
         g.lineStyle(1, 0xf87171, 0.9).strokeCircle(x, y, BALANCE.danmaku.hitRadius + 2);
+      }
+    }
+
+    // 裁定67: 固定砲台（壊せない設置物）。赤いひし形で描く
+    if (to.danmaku) {
+      const r = BALANCE.danmaku.subTurrets.bodyRadius;
+      for (const st of to.danmaku.subTurrets) {
+        g.fillStyle(0x7f1d1d, 0.95).fillPoints([{ x: st.x, y: st.y - r }, { x: st.x + r, y: st.y }, { x: st.x, y: st.y + r }, { x: st.x - r, y: st.y }], true);
+        g.lineStyle(2, 0xfca5a5, 1).strokePoints([{ x: st.x, y: st.y - r }, { x: st.x + r, y: st.y }, { x: st.x, y: st.y + r }, { x: st.x - r, y: st.y }], true);
+        g.fillStyle(0xfca5a5, 1).fillCircle(st.x, st.y, 4);
       }
     }
 
