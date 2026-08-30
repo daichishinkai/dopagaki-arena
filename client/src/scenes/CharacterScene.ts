@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import { BALANCE, crossSecondsOf, moveSpeedOf, shieldMaxOf, type CharClass } from "@pvp/shared";
 import { session } from "../session";
-import { button, FONT, title } from "../ui";
+import { button, drawClassIcon, FONT, title } from "../ui";
 import { applyView, VIEW } from "../viewport";
 
 const F = BALANCE.field;
@@ -164,14 +164,16 @@ export class CharacterScene extends Phaser.Scene {
       const x = F.width / 2 + (i - 1) * 110;
       const active = c === this.cls;
       const g = this.add.graphics();
-      g.fillStyle(CLASS_COLOR[c], active ? 0.18 : 0.75);
-      g.fillCircle(x, 96, 26);
-      g.lineStyle(2, CLASS_COLOR[c], active ? 0.5 : 1);
-      g.strokeCircle(x, 96, 26);
+      // 裁定69: 対戦中と同じ形。開いているキャラは明るく、他は暗めに
+      if (active) {
+        g.fillStyle(CLASS_COLOR[c], 0.18).fillCircle(x, 92, 30);
+        g.lineStyle(2, CLASS_COLOR[c], 0.6).strokeCircle(x, 92, 30);
+      }
+      drawClassIcon(g, c, x, 92, 18, CLASS_COLOR[c], active ? 1 : 0.5);
       this.add
-        .text(x, 96, CLASS_NAME[c], { fontFamily: FONT, fontSize: "12px", color: active ? "#64748b" : "#0a1420", fontStyle: "bold" })
+        .text(x, 122, CLASS_NAME[c], { fontFamily: FONT, fontSize: "11px", color: active ? "#e5e7eb" : "#64748b" })
         .setOrigin(0.5);
-      const zone = this.add.zone(x, 96, 60, 60).setInteractive({ useHandCursor: true });
+      const zone = this.add.zone(x, 100, 72, 76).setInteractive({ useHandCursor: true });
       zone.on("pointerdown", () => {
         if (c === this.cls) return;
         this.scene.restart({ cls: c, tab: this.tab });
@@ -181,14 +183,14 @@ export class CharacterScene extends Phaser.Scene {
     // 裁定68: タブ。1画面に収まらない文量なので3ページに分ける
     TABS.forEach((t, i) => {
       const x = F.width / 2 + (i - 1) * 250;
-      const b = button(this, x, 146, t.label, () => {
+      const b = button(this, x, 152, t.label, () => {
         if (t.id === this.tab) return;
         this.scene.restart({ cls: this.cls, tab: t.id });
       }, 236, 40);
       b.setSelected(t.id === this.tab);
     });
 
-    const top = 184;
+    const top = 188;
     const colW = (F.width - 120 - 40) / 2; // 左右2列・間40
     const rightX = 60 + colW + 40;
 

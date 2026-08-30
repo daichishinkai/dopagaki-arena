@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import { BALANCE } from "@pvp/shared";
 import { saveTouchPref, session } from "../session";
-import { button, FONT, label, panel, title } from "../ui";
+import { button, drawClassIcon, FONT, label, panel, title } from "../ui";
 import { BUILD_ID } from "../build";
 import { applyView, VIEW } from "../viewport";
 
@@ -154,18 +154,15 @@ export class TitleScene extends Phaser.Scene {
     });
 
     // キャラ説明: アイコンを押すと各キャラの説明画面へ
-    label(this, 640, 528, "キャラクター解説", 14, "#7dd3fc");
+    label(this, 640, 522, "キャラクター解説", 14, "#7dd3fc");
     const CLASS_COLOR = { speed: 0x22d3ee, heavy: 0xfb923c, support: 0xa3e635 } as const;
     order.forEach((c, i) => {
       const ix = 640 + (i - 1) * 96;
       const g = this.add.graphics();
-      g.fillStyle(CLASS_COLOR[c], 0.75).fillCircle(ix, 570, 30);
-      g.lineStyle(2, CLASS_COLOR[c], 1).strokeCircle(ix, 570, 30);
+      drawClassIcon(g, c, ix, 560, 18, CLASS_COLOR[c]);
+      this.add.text(ix, 590, CLASS_NAME[c], { fontFamily: FONT, fontSize: "11px", color: "#cbd5e1" }).setOrigin(0.5);
       this.add
-        .text(ix, 570, CLASS_NAME[c], { fontFamily: FONT, fontSize: "12px", color: "#0a1420", fontStyle: "bold" })
-        .setOrigin(0.5);
-      this.add
-        .zone(ix, 570, 64, 64)
+        .zone(ix, 568, 72, 70)
         .setInteractive({ useHandCursor: true })
         .on("pointerdown", () => this.scene.start("character", { cls: c }));
     });

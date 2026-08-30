@@ -74,3 +74,36 @@ export function panel(scene: Phaser.Scene, x: number, y: number, w: number, h: n
     .text(x, y - h / 2 + 28, heading, { fontFamily: FONT, fontSize: "20px", color: "#7dd3fc", fontStyle: "bold" })
     .setOrigin(0.5);
 }
+
+/**
+ * 裁定69: キャラのアイコン。対戦中の体の形（速=鋭い三角 / 重=六角 / 支=円）と同じ描き方にする。
+ * aim は右向き（0）固定。ラベル文字はアイコンの下に置く前提で、中には描かない。
+ */
+export function drawClassIcon(g: Phaser.GameObjects.Graphics, cls: "speed" | "heavy" | "support", x: number, y: number, r: number, color: number, alpha = 0.9): void {
+  const aim = -Math.PI / 2; // 上向き（アイコンとして安定して見える）
+  g.fillStyle(color, alpha);
+  g.lineStyle(3, 0xffffff, 0.85);
+  if (cls === "speed") {
+    const pts = [
+      { x: x + Math.cos(aim) * r * 1.25, y: y + Math.sin(aim) * r * 1.25 },
+      { x: x + Math.cos(aim + 2.5) * r, y: y + Math.sin(aim + 2.5) * r },
+      { x: x + Math.cos(aim - 2.5) * r, y: y + Math.sin(aim - 2.5) * r },
+    ];
+    g.fillPoints(pts, true);
+    g.strokePoints(pts, true);
+  } else if (cls === "heavy") {
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+      const a = aim + (Math.PI / 3) * i;
+      pts.push({ x: x + Math.cos(a) * r, y: y + Math.sin(a) * r });
+    }
+    g.fillPoints(pts, true);
+    g.strokePoints(pts, true);
+  } else {
+    g.fillCircle(x, y, r * 0.95);
+    g.strokeCircle(x, y, r * 0.95);
+  }
+  // 向きの線（対戦中と同じ）
+  g.lineStyle(3, 0xffffff, 0.7);
+  g.lineBetween(x, y, x + Math.cos(aim) * (r + 6), y + Math.sin(aim) * (r + 6));
+}
